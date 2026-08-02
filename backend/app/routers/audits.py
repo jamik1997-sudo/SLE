@@ -247,6 +247,21 @@ def batch_sync(audit_id: str, payload: BatchSyncIn, db: Session = Depends(get_db
     return {"saved": True, "at": audit.last_saved_at}
 
 
+@router.post("/{audit_id}/cancel")
+def cancel_audit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    audit = load_audit_basic(db, audit_id)
+    ensure_access(user, audit, write=True)
+    if audit.status == AuditStatus.completed:
+        raise HTTPException(400, "Завершённый аудит отменить нельзя")
+    if audit.status == AuditStatus.cancelled:
+        return {"cancelled": True}
+    audit.status = AuditStatus.cancelled
+    audit.last_saved_at = datetime.utcnow()
+    db.add(ActivityLog(user_id=user.id, action="Отменил незавершённый аудит", entity_type="audit", entity_id=audit.id))
+    db.commit()
+    return {"cancelled": True}
+
+
 @router.post("/{audit_id}/submit")
 def submit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
     audit = load_audit(db, audit_id); ensure_access(user, audit, write=True)

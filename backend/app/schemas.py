@@ -13,6 +13,11 @@ class TokenOut(BaseModel):
     token_type: str = "bearer"
 
 
+class ChangePasswordIn(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class RegionOut(BaseModel):
     id: str
     name: str

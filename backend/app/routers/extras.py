@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, or_, func
 from sqlalchemy.orm import Session, selectinload
 from app.database import get_db
-from app.models import (ActivityLog, Audit, AuditStatus, Employee, QuestionSetting, Region, Role, ScoreSetting, User, VisitTiming)
+from app.models import (ActivityLog, Answer, Audit, AuditStatus, Employee, QuestionSetting, Region, Role, ScoreSetting, User, VisitTiming)
 from app.security import current_user, require_roles
 
 router = APIRouter(prefix="/extras", tags=["extras"])
@@ -89,3 +89,73 @@ def end_visit(audit_id:str,visit_number:int,db:Session=Depends(get_db),user:User
 def timings(audit_id:str,db:Session=Depends(get_db),user:User=Depends(current_user)):
     rows=db.scalars(select(VisitTiming).where(VisitTiming.audit_id==audit_id).order_by(VisitTiming.visit_number)).all()
     return [{"visit_number":x.visit_number,"started_at":x.started_at,"ended_at":x.ended_at,"minutes":round((x.ended_at-x.started_at).total_seconds()/60,1) if x.started_at and x.ended_at else None} for x in rows]
+
+
+@router.get("/questionnaire-report")
+def questionnaire_report(
+    include_details: bool = False,
+    limit: int = 1000,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    stmt = (
+        select(Audit)
+        .options(
+            selectinload(Audit.employee),
+            selectinload(Audit.region),
+            selectinload(Audit.auditor),
+            selectinload(Audit.answers),
+        )
+        .order_by(Audit.audit_date.desc(), Audit.last_saved_at.desc())
+    )
+    stmt = scope(stmt, user)
+    audits = db.scalars(stmt.limit(min(max(limit, 1), 3000))).all()
+    qrows = db.scalars(select(QuestionSetting).where(QuestionSetting.is_active == True).order_by(QuestionSetting.sort_order)).all()
+    questions = [{
+        "key": q.key, "section": q.section, "step": q.step, "weight": q.weight, "text": q.text_ru
+    } for q in qrows]
+    stats = {q["key"]: {**q, "filled": 0, "ones": 0, "zeros": 0} for q in questions}
+    status_counts = {"draft": 0, "in_progress": 0, "completed": 0, "cancelled": 0}
+    details = []
+    total_answers = 0
+    for audit in audits:
+        status_counts[audit.status.value] = status_counts.get(audit.status.value, 0) + 1
+        for answer in audit.answers:
+            item = stats.get(answer.question_key)
+            if not item:
+                continue
+            item["filled"] += 1
+            total_answers += 1
+            if answer.answer_value == "1": item["ones"] += 1
+            elif answer.answer_value == "0": item["zeros"] += 1
+            if include_details and len(details) < 30000:
+                details.append({
+                    "audit_id": audit.id,
+                    "audit_date": str(audit.audit_date),
+                    "status": audit.status.value,
+                    "region": audit.region.name,
+                    "employee": audit.employee.full_name,
+                    "auditor": audit.auditor.full_name,
+                    "visit_number": answer.visit_number,
+                    "section": item["section"],
+                    "question": item["text"],
+                    "answer": answer.answer_value,
+                    "updated_at": answer.updated_at.isoformat() if answer.updated_at else None,
+                })
+    summary = []
+    audit_count = len(audits)
+    for q in questions:
+        item = stats[q["key"]]
+        expected_per_audit = 1 if q["step"] in (0, 8) else 5
+        expected = audit_count * expected_per_audit
+        item["expected"] = expected
+        item["completion_percent"] = round(item["filled"] / expected * 100, 1) if expected else 0
+        item["success_percent"] = round(item["ones"] / item["filled"] * 100, 1) if item["filled"] else 0
+        summary.append(item)
+    return {
+        "audit_count": audit_count,
+        "total_answers": total_answers,
+        "status_counts": status_counts,
+        "questions": summary,
+        "details": details if include_details else [],
+    }

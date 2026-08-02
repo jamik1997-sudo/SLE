@@ -3,9 +3,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import User
-from app.schemas import LoginIn, TokenOut
-from app.security import create_token, current_user, verify_password
+from app.models import ActivityLog, User
+from app.schemas import ChangePasswordIn, LoginIn, TokenOut
+from app.security import create_token, current_user, hash_password, verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -29,3 +29,20 @@ def me(user: User = Depends(current_user)):
         "role": user.role.value,
         "regions": [{"id": x.region.id, "name": x.region.name} for x in user.regions],
     }
+
+
+@router.post("/change-password")
+def change_password(
+    payload: ChangePasswordIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=422, detail="Текущий пароль указан неверно")
+    if payload.current_password == payload.new_password:
+        raise HTTPException(status_code=422, detail="Новый пароль должен отличаться от текущего")
+    user.password_hash = hash_password(payload.new_password)
+    user.must_change_password = False
+    db.add(ActivityLog(user_id=user.id, action="Изменил пароль", entity_type="user", entity_id=user.id))
+    db.commit()
+    return {"changed": True}
