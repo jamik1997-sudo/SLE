@@ -9,3 +9,15 @@
 .dashboard-filters select{min-width:0}
 @media(max-width:900px){.grid.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:560px){.grid.four{grid-template-columns:1fr}}
+
+/* Dashboard: results by questionnaire blocks */
+.block-results th:nth-child(2),
+.block-results td:nth-child(2){text-align:center;width:150px}
+.block-results th:nth-child(3),
+.block-results td:nth-child(3){width:260px}
+.block-result-cell{display:grid;grid-template-columns:64px 1fr;align-items:center;gap:12px}
+.block-result-cell .mini-bar{height:10px}
+@media (max-width:640px){
+  .block-results th:nth-child(2),.block-results td:nth-child(2){width:auto}
+  .block-results th:nth-child(3),.block-results td:nth-child(3){min-width:190px;width:auto}
+}

@@ -88,7 +88,7 @@ def list_audits(limit: int = 100, db: Session = Depends(get_db), user: User = De
 def dashboard(region_id: str | None = None, auditor_id: str | None = None, employee_id: str | None = None, month: str | None = None, db: Session = Depends(get_db), user: User = Depends(current_user)):
     stmt = (
         select(Audit)
-        .options(selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor))
+        .options(selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor), selectinload(Audit.answers))
         .where(Audit.status == AuditStatus.completed)
         .order_by(Audit.submitted_at.desc())
     )
@@ -118,6 +118,27 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
     region_map = {}
     employee_map = {}
     month_map = {}
+
+    # Результаты по блокам. Для визитных блоков количество оценок —
+    # число отдельных визитов, попавших под выбранные фильтры.
+    qrows = db.scalars(
+        select(QuestionSetting)
+        .where(QuestionSetting.is_active == True)
+        .order_by(QuestionSetting.sort_order)
+    ).all()
+    qmap = {q.key: q for q in qrows}
+    block_map = {}
+    for q in qrows:
+        if q.step in (0, 8):
+            continue
+        block_map.setdefault(q.section, {
+            "section": q.section,
+            "order": q.sort_order,
+            "earned": 0.0,
+            "possible": 0.0,
+            "instances": set(),
+        })
+
     for a in rows:
         levels[a.level or "Базовый"] = levels.get(a.level or "Базовый", 0) + 1
         region = region_map.setdefault(a.region.name, {"sum": 0.0, "count": 0})
@@ -130,6 +151,32 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
         month = month_map.setdefault(month_key, {"sum": 0.0, "count": 0})
         month["sum"] += a.total_percent or 0
         month["count"] += 1
+
+        for answer in a.answers:
+            q = qmap.get(answer.question_key)
+            if not q or q.step in (0, 8):
+                continue
+            block = block_map.setdefault(q.section, {
+                "section": q.section,
+                "order": q.sort_order,
+                "earned": 0.0,
+                "possible": 0.0,
+                "instances": set(),
+            })
+            weight = float(q.weight or 0)
+            block["possible"] += weight
+            if answer.answer_value == "1":
+                block["earned"] += weight
+            block["instances"].add((a.id, answer.visit_number))
+
+    blocks = sorted([
+        {
+            "name": item["section"],
+            "count": len(item["instances"]),
+            "average": round(item["earned"] / item["possible"] * 100, 1) if item["possible"] else 0,
+        }
+        for item in block_map.values()
+    ], key=lambda x: next((v["order"] for v in block_map.values() if v["section"] == x["name"]), 9999))
 
     regions = sorted([
         {"name": name, "average": round(v["sum"] / v["count"], 1), "count": v["count"]}
@@ -170,7 +217,7 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
     month_options = sorted({a.audit_date.strftime("%Y-%m") for a in db.scalars(month_stmt).all()}, reverse=True)
     return {
         "total": total, "average": average, "levels": levels, "regions": regions,
-        "employees": employees, "months": months, "recent": recent,
+        "employees": employees, "months": months, "recent": recent, "blocks": blocks,
         "filters": {
             "regions": [{"id": x.id, "name": x.name} for x in option_regions],
             "auditors": [{"id": x.id, "name": x.full_name} for x in option_auditors],
@@ -315,7 +362,8 @@ def submit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(cu
         for n in visits:
             if (n, q["key"]) not in answer_map: missing.append(f"{n}:{q['key']}")
     for v in audit.visits:
-        if not v.shop_code: missing.append(f"visit:{v.visit_number}")
+        if not v.shop_code: missing.append(f"visit:{v.visit_number}:shop_code")
+        if v.latitude is None or v.longitude is None: missing.append(f"visit:{v.visit_number}:gps")
     if missing: raise HTTPException(422, detail={"message":"Аудит заполнен не полностью","missing":missing})
     ss = db.get(ScoreSetting, 1) or ScoreSetting(id=1)
     total, percent, level, sections = calculate(audit, questions, ss.confident_min, ss.master_min)
