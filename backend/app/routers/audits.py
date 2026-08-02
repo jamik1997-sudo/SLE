@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 from app.database import get_db
-from app.models import Answer, Audit, AuditStatus, Employee, Role, User, Visit, QuestionSetting, ScoreSetting, ActivityLog
+from app.models import Answer, Audit, AuditStatus, Employee, Region, Role, User, Visit, QuestionSetting, ScoreSetting, ActivityLog
 from app.questionnaire import QUESTION_MAP, QUESTIONS
 from app.schemas import AnswerSave, AuditCreate, ProgressSave, VisitSave, BatchSyncIn
 from app.security import current_user
