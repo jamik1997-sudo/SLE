@@ -29,8 +29,8 @@ class UserOut(BaseModel):
 
 
 class UserCreate(BaseModel):
-    full_name: str
-    login: str
+    full_name: str = Field(min_length=2, max_length=200)
+    login: str = Field(min_length=3, max_length=80)
     password: str = Field(min_length=8)
     role: Role
     region_ids: list[str] = []

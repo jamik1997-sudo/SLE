@@ -23,11 +23,17 @@ def load_audit(db: Session, audit_id: str) -> Audit:
     return audit
 
 
-def ensure_access(user: User, audit: Audit):
-    if user.role != Role.admin and audit.region_id not in allowed_regions(user):
+def ensure_region_access(user: User, region_id: str):
+    if user.role == Role.leader and region_id not in allowed_regions(user):
         raise HTTPException(403, "Нет доступа к региону")
-    if user.role == Role.leader and audit.auditor_id != user.id:
-        raise HTTPException(403, "Нет доступа к аудиту")
+
+
+def ensure_access(user: User, audit: Audit, *, write: bool = False):
+    # Администратор и менеджер имеют доступ по всей республике.
+    ensure_region_access(user, audit.region_id)
+    # Руководитель может просматривать данные своего региона, но менять только собственный аудит.
+    if write and user.role == Role.leader and audit.auditor_id != user.id:
+        raise HTTPException(403, "Можно изменять только собственный аудит")
 
 
 @router.get("/questionnaire")
@@ -35,14 +41,24 @@ def questionnaire(_: User = Depends(current_user)):
     return QUESTIONS
 
 
+@router.get("/regions")
+def regions(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    from app.models import Region
+    stmt = select(Region).where(Region.is_active == True).order_by(Region.name)
+    if user.role == Role.leader:
+        stmt = stmt.where(Region.id.in_(allowed_regions(user)))
+    return db.scalars(stmt).all()
+
+
 @router.get("/employees")
 def employees(region_id: str | None = None, db: Session = Depends(get_db), user: User = Depends(current_user)):
     ids = allowed_regions(user)
-    if user.role != Role.admin:
+    if user.role == Role.leader:
         if region_id and region_id not in ids:
             raise HTTPException(403, "Регион не закреплён")
         region_ids = [region_id] if region_id else list(ids)
     else:
+        # Администратор и менеджер могут выбирать любой регион.
         region_ids = [region_id] if region_id else []
     stmt = select(Employee).where(Employee.is_active == True)
     if region_ids:
@@ -54,11 +70,9 @@ def employees(region_id: str | None = None, db: Session = Depends(get_db), user:
 def list_audits(db: Session = Depends(get_db), user: User = Depends(current_user)):
     stmt = select(Audit).options(selectinload(Audit.employee), selectinload(Audit.region)).order_by(Audit.last_saved_at.desc())
     if user.role == Role.leader:
-        stmt = stmt.where(Audit.auditor_id == user.id)
-    elif user.role != Role.admin:
         stmt = stmt.where(Audit.region_id.in_(allowed_regions(user)))
     rows = db.scalars(stmt).all()
-    return [{"id":a.id,"audit_date":a.audit_date,"status":a.status.value,"current_visit":a.current_visit,"current_step":a.current_step,"total_percent":a.total_percent,"level":a.level,"employee_name":a.employee.full_name,"region_name":a.region.name,"last_saved_at":a.last_saved_at} for a in rows]
+    return [{"id":a.id,"audit_date":a.audit_date,"status":a.status.value,"current_visit":a.current_visit,"current_step":a.current_step,"total_percent":a.total_percent,"level":a.level,"employee_name":a.employee.full_name,"region_name":a.region.name,"last_saved_at":a.last_saved_at,"auditor_id":a.auditor_id,"is_mine":a.auditor_id == user.id} for a in rows]
 
 
 @router.post("")
@@ -69,8 +83,7 @@ def create_audit(payload: AuditCreate, db: Session = Depends(get_db), user: User
     region_id = payload.region_id or employee.region_id
     if employee.region_id != region_id:
         raise HTTPException(400, "Сотрудник относится к другому региону")
-    if user.role != Role.admin and region_id not in allowed_regions(user):
-        raise HTTPException(403, "Регион не закреплён")
+    ensure_region_access(user, region_id)
     existing = db.scalar(select(Audit).where(Audit.auditor_id == user.id, Audit.status.in_([AuditStatus.draft, AuditStatus.in_progress])))
     if existing:
         raise HTTPException(409, detail={"message":"Есть незавершённый аудит","audit_id":existing.id})
@@ -97,7 +110,7 @@ def get_audit(audit_id: str, db: Session = Depends(get_db), user: User = Depends
 
 @router.put("/{audit_id}/visits/{visit_number}")
 def save_visit(audit_id: str, visit_number: int, payload: VisitSave, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    audit = load_audit(db, audit_id); ensure_access(user, audit)
+    audit = load_audit(db, audit_id); ensure_access(user, audit, write=True)
     if audit.status == AuditStatus.completed: raise HTTPException(400, "Аудит завершён")
     visit = db.scalar(select(Visit).where(Visit.audit_id == audit.id, Visit.visit_number == visit_number))
     for key, value in payload.model_dump(exclude_unset=True).items(): setattr(visit, key, value)
@@ -108,7 +121,7 @@ def save_visit(audit_id: str, visit_number: int, payload: VisitSave, db: Session
 
 @router.put("/{audit_id}/answer")
 def save_answer(audit_id: str, payload: AnswerSave, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    audit = load_audit(db, audit_id); ensure_access(user, audit)
+    audit = load_audit(db, audit_id); ensure_access(user, audit, write=True)
     q = QUESTION_MAP.get(payload.question_key)
     if not q: raise HTTPException(400, "Неизвестный вопрос")
     if payload.answer_value not in (["1","0","N/A"] if q["allow_na"] else ["1","0"]): raise HTTPException(400, "Недопустимый ответ")
@@ -124,14 +137,14 @@ def save_answer(audit_id: str, payload: AnswerSave, db: Session = Depends(get_db
 
 @router.put("/{audit_id}/progress")
 def progress(audit_id: str, payload: ProgressSave, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    audit = load_audit(db, audit_id); ensure_access(user, audit)
+    audit = load_audit(db, audit_id); ensure_access(user, audit, write=True)
     audit.current_visit = payload.current_visit; audit.current_step = payload.current_step; audit.last_saved_at = datetime.utcnow()
     db.commit(); return {"saved": True}
 
 
 @router.post("/{audit_id}/submit")
 def submit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    audit = load_audit(db, audit_id); ensure_access(user, audit)
+    audit = load_audit(db, audit_id); ensure_access(user, audit, write=True)
     answer_map = {(a.visit_number, a.question_key): a for a in audit.answers}
     missing = []
     for q in QUESTIONS:
