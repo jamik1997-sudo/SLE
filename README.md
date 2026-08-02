@@ -72,3 +72,16 @@ then return it to `false`. Alternatively run `python -m app.init_db` once.
 
 The frontend now wakes Render in the background, automatically retries safe requests,
 shows cached home data immediately, and keeps the service awake while the app is open.
+
+
+## v2.7.1
+- Менеджер может добавлять новые регионы.
+- Добавление региона записывается в журнал действий.
+
+## v2.8 — ускорение
+- Версионированные JS/CSS-файлы кэшируются CDN Vercel на 1 год.
+- Повторные GET-запросы объединяются: одинаковый запрос выполняется только один раз.
+- Кратковременный кэш справочников, списка аудитов и Dashboard уменьшает число запросов к Render/Supabase.
+- Dashboard кэшируется на backend 30 секунд и автоматически сбрасывается после изменений аудита.
+- Добавлены preconnect/dns-prefetch к Render.
+- Список на главной ограничен 30 последними аудитами.

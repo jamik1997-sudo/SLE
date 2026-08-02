@@ -68,7 +68,11 @@ def regions(db: Session = Depends(get_db), _: User = Depends(require_roles(Role.
 
 
 @router.post("/regions")
-def create_region(name: str, db: Session = Depends(get_db), _: User = Depends(require_roles(Role.admin))):
+def create_region(
+    name: str,
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_roles(Role.admin, Role.manager)),
+):
     clean = name.strip()
     if not clean:
         raise HTTPException(422, "Введите название региона")
@@ -76,6 +80,16 @@ def create_region(name: str, db: Session = Depends(get_db), _: User = Depends(re
         raise HTTPException(409, "Такой регион уже существует")
     region = Region(name=clean)
     db.add(region)
+    db.flush()
+    db.add(
+        ActivityLog(
+            user_id=actor.id,
+            action="Добавил регион",
+            entity_type="region",
+            entity_id=region.id,
+            details=region.name,
+        )
+    )
     db.commit()
     db.refresh(region)
     return region

@@ -8,6 +8,7 @@ from app.questionnaire import QUESTION_MAP, QUESTIONS
 from app.schemas import AnswerSave, AuditCreate, ProgressSave, VisitSave, BatchSyncIn
 from app.security import current_user
 from app.services.scoring import calculate
+from app.cache import get_cache, set_cache, clear_cache
 
 router = APIRouter(prefix="/audits", tags=["audits"])
 
@@ -45,9 +46,12 @@ def ensure_access(user: User, audit: Audit, *, write: bool = False):
 
 @router.get("/questionnaire")
 def questionnaire(db: Session = Depends(get_db), _: User = Depends(current_user)):
+    cached = get_cache("questionnaire")
+    if cached is not None:
+        return cached
     rows=db.scalars(select(QuestionSetting).where(QuestionSetting.is_active==True).order_by(QuestionSetting.sort_order)).all()
-    if not rows: return QUESTIONS
-    return [{"key":q.key,"section":q.section,"step":q.step,"weight":q.weight,"allow_na":False,"text":q.text_ru,"text_uz":q.text_uz,"is_active":q.is_active} for q in rows]
+    result = QUESTIONS if not rows else [{"key":q.key,"section":q.section,"step":q.step,"weight":q.weight,"allow_na":False,"text":q.text_ru,"text_uz":q.text_uz,"is_active":q.is_active} for q in rows]
+    return set_cache("questionnaire", result, ttl=300)
 
 
 @router.get("/regions")
@@ -86,6 +90,10 @@ def list_audits(limit: int = 100, db: Session = Depends(get_db), user: User = De
 
 @router.get("/dashboard")
 def dashboard(region_id: str | None = None, auditor_id: str | None = None, employee_id: str | None = None, month: str | None = None, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    cache_key = f"dashboard:{user.id}:{region_id or ''}:{auditor_id or ''}:{employee_id or ''}:{month or ''}"
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return cached
     stmt = (
         select(Audit)
         .options(selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor), selectinload(Audit.answers))
@@ -215,7 +223,7 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
     if user.role == Role.leader:
         month_stmt = month_stmt.where(Audit.region_id.in_(allowed_regions(user)))
     month_options = sorted({a.audit_date.strftime("%Y-%m") for a in db.scalars(month_stmt).all()}, reverse=True)
-    return {
+    result = {
         "total": total, "average": average, "levels": levels, "regions": regions,
         "employees": employees, "months": months, "recent": recent, "blocks": blocks,
         "filters": {
@@ -226,6 +234,7 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
             "selected": {"region_id": region_id, "auditor_id": auditor_id, "employee_id": employee_id, "month": month},
         },
     }
+    return set_cache(cache_key, result, ttl=30)
 
 
 @router.post("")
@@ -243,6 +252,7 @@ def create_audit(payload: AuditCreate, db: Session = Depends(get_db), user: User
         db.add(Visit(audit_id=audit.id, visit_number=n))
     db.add(ActivityLog(user_id=user.id,action="Создал аудит",entity_type="audit",entity_id=audit.id,details=employee.full_name))
     db.commit()
+    clear_cache("dashboard:")
     return {"id": audit.id}
 
 
@@ -347,6 +357,7 @@ def cancel_audit(audit_id: str, db: Session = Depends(get_db), user: User = Depe
     audit.last_saved_at = datetime.utcnow()
     db.add(ActivityLog(user_id=user.id, action="Отменил незавершённый аудит", entity_type="audit", entity_id=audit.id))
     db.commit()
+    clear_cache("dashboard:")
     return {"cancelled": True}
 
 
