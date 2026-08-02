@@ -1,0 +1,5 @@
+"use client";
+import { FormEvent, useState } from "react";
+import { api, setToken } from "@/lib/api";
+import { useRouter } from "next/navigation";
+export default function Login(){const [login,setLogin]=useState("");const [password,setPassword]=useState("");const [error,setError]=useState("");const router=useRouter();async function submit(e:FormEvent){e.preventDefault();setError("");try{const r=await api<{access_token:string}>("/auth/login",{method:"POST",body:JSON.stringify({login,password})});setToken(r.access_token);router.push('/dashboard')}catch(e){setError((e as Error).message)}}return <main className="shell"><div className="login card"><h1><span className="dot"/>Вход в SLE</h1><p className="muted">Введите логин и пароль, созданные администратором или менеджером.</p><form className="grid" onSubmit={submit}><label className="field">Логин<input value={login} onChange={e=>setLogin(e.target.value)} required/></label><label className="field">Пароль<input type="password" value={password} onChange={e=>setPassword(e.target.value)} required/></label>{error&&<div className="error">{error}</div>}<button className="btn btn-primary">Войти</button></form></div></main>}
