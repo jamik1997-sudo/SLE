@@ -131,8 +131,7 @@ def save_answer(audit_id: str, payload: AnswerSave, db: Session = Depends(get_db
     audit = load_audit_basic(db, audit_id); ensure_access(user, audit, write=True)
     q = QUESTION_MAP.get(payload.question_key)
     if not q: raise HTTPException(400, "Неизвестный вопрос")
-    if payload.answer_value not in (["1","0","N/A"] if q["allow_na"] else ["1","0"]): raise HTTPException(400, "Недопустимый ответ")
-    if payload.answer_value in ["0","N/A"] and not (payload.comment or "").strip(): raise HTTPException(422, "Для ответа 0 или N/A обязателен комментарий")
+    if payload.answer_value not in ["1", "0"]: raise HTTPException(400, "Недопустимый ответ")
     answer = db.scalar(select(Answer).where(Answer.audit_id == audit.id, Answer.visit_number == payload.visit_number, Answer.question_key == payload.question_key))
     if not answer:
         answer = Answer(audit_id=audit.id, visit_number=payload.visit_number, question_key=payload.question_key, answer_value=payload.answer_value)
@@ -163,11 +162,8 @@ def batch_sync(audit_id: str, payload: BatchSyncIn, db: Session = Depends(get_db
             q = QUESTION_MAP.get(item.question_key)
             if not q:
                 raise HTTPException(400, f"Неизвестный вопрос: {item.question_key}")
-            allowed = ["1", "0", "N/A"] if q["allow_na"] else ["1", "0"]
-            if item.answer_value not in allowed:
+            if item.answer_value not in ["1", "0"]:
                 raise HTTPException(400, "Недопустимый ответ")
-            if item.answer_value in ["0", "N/A"] and not (item.comment or "").strip():
-                raise HTTPException(422, "Для ответа 0 или N/A обязателен комментарий")
             obj = answer_map.get((item.visit_number, item.question_key))
             if not obj:
                 obj = Answer(audit_id=audit.id, visit_number=item.visit_number, question_key=item.question_key, answer_value=item.answer_value)

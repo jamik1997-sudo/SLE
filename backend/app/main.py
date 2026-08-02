@@ -11,7 +11,14 @@ from app.security import hash_password
 settings = get_settings()
 app = FastAPI(title="SLE Audit API", version="1.0.0")
 app.add_middleware(GZipMiddleware, minimum_size=700)
-app.add_middleware(CORSMiddleware, allow_origins=settings.cors_list, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_list,
+    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(audits.router)

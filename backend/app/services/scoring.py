@@ -15,7 +15,7 @@ def calculate(audit: Audit) -> tuple[float, float, str, dict[str, float]]:
     for q in QUESTIONS:
         values = by_key.get(q["key"], [])
         # Questions before/after visits are answered once; visit questions are averaged across 5 visits.
-        applicable = [v for v in values if v != "N/A"]
+        applicable = [v for v in values if v in ("1", "0")]
         score = 0.0 if not applicable else (sum(1 for v in applicable if v == "1") / len(applicable)) * q["weight"]
         section_scores[q["section"]] += score
         total += score

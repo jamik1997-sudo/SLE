@@ -80,10 +80,10 @@ function renderWizard(){
     }
   }
   shell(`<div class="card"><strong>${esc(meta.title)}</strong><div class="muted">${esc(meta.sub)} · Экран ${meta.screen} из 37</div><div class="progress-wrap"><div class="progress" style="width:${pct}%"></div></div></div><div class="card accent"><h1>${esc(meta.title)}</h1><p class="muted">${esc(meta.sub)}</p></div>${body}<div class="save-state" id="saveState">Все изменения сохраняются автоматически</div><div class="bottom"><button class="btn secondary" id="prev">Назад</button><button class="btn primary" id="next">${state.step===8?'Отправить':'Далее'}</button></div>`);bindWizard()}
-function questionCards(qs,visit,map){let out='',last='';for(const q of qs){if(q.section!==last){if(last)out+='</div>';out+=`<div class="card"><h2>${esc(q.section)}</h2><p class="muted">${q.allow_na?'Доступен ответ N/A':'Ответ N/A не используется'}</p>`;last=q.section}const a=map[`${visit}:${q.key}`];out+=`<div class="question" data-key="${q.key}" data-visit="${visit}"><div class="question-title">${esc(q.text)} *</div><div class="answers"><button class="answer ${a?.answer_value==='1'?'selected':''}" data-value="1">1 — выполнено</button><button class="answer ${a?.answer_value==='0'?'selected':''}" data-value="0">0 — не выполнено</button>${q.allow_na?`<button class="answer ${a?.answer_value==='N/A'?'selected':''}" data-value="N/A">N/A — не применимо</button>`:''}</div><div class="field comment" ${a&&['0','N/A'].includes(a.answer_value)?'':'hidden'}><label>Комментарий обязателен</label><textarea>${esc(a?.comment||'')}</textarea></div></div>`}if(last)out+='</div>';return out}
+function questionCards(qs,visit,map){let out='',last='';for(const q of qs){if(q.section!==last){if(last)out+='</div>';out+=`<div class="card"><h2>${esc(q.section)}</h2>`;last=q.section}const a=map[`${visit}:${q.key}`];out+=`<div class="question" data-key="${q.key}" data-visit="${visit}"><div class="question-title">${esc(q.text)} *</div><div class="answers two-options"><button class="answer ${a?.answer_value==='1'?'selected':''}" data-value="1">1 — выполнено</button><button class="answer ${a?.answer_value==='0'?'selected':''}" data-value="0">0 — не выполнено</button></div></div>`}if(last)out+='</div>';return out}
 function visitCheck(){return`<div class="card"><h2>Проверка</h2>${state.audit.visits.map(v=>`<div class="visit-row"><span>Визит ${v.visit_number}: код ТТ ${esc(v.shop_code||'—')}</span><span>GPS ${v.gps_accuracy==null?'—':Math.round(v.gps_accuracy)+' м'}</span></div>`).join('')}</div>`}
 function setSaving(t){const s=$('#saveState');if(s)s.textContent=t}
-function updateLocalAnswer(visit,key,value,comment){
+function updateLocalAnswer(visit,key,value,comment=null){
   let found=state.audit.answers.find(a=>a.visit_number===visit&&a.question_key===key);
   if(found){found.answer_value=value;found.comment=comment}else{found={visit_number:visit,question_key:key,answer_value:value,comment};state.audit.answers.push(found)}
   state.pendingAnswers.set(`${visit}:${key}`,found);
@@ -107,13 +107,11 @@ async function flushSync(extra={}){
   return state.syncing;
 }
 async function saveAnswer(card,value){
-  const key=card.dataset.key,visit=Number(card.dataset.visit),comment=$('textarea',card)?.value?.trim()||null;
-  if(['0','N/A'].includes(value)&&!comment){$('.comment',card).hidden=false;throw new Error('Для ответа 0 или N/A укажите комментарий')}
-  updateLocalAnswer(visit,key,value,comment);
+  const key=card.dataset.key,visit=Number(card.dataset.visit);
+  updateLocalAnswer(visit,key,value,null);
 }
 function bindWizard(){
-  $$('.answer').forEach(b=>b.onclick=()=>{const card=b.closest('.question'),v=b.dataset.value;$('.comment',card).hidden=!['0','N/A'].includes(v);try{saveAnswer(card,v);$$('.answer',card).forEach(x=>x.classList.toggle('selected',x===b))}catch(e){toast(e.message)}});
-  $$('.comment textarea').forEach(t=>t.addEventListener('input',()=>{const card=t.closest('.question'),sel=$('.answer.selected',card);if(sel&&t.value.trim())saveAnswer(card,sel.dataset.value).catch(e=>toast(e.message))}));
+  $$('.answer').forEach(b=>b.onclick=()=>{const card=b.closest('.question'),v=b.dataset.value;saveAnswer(card,v);$$('.answer',card).forEach(x=>x.classList.toggle('selected',x===b))});
   $('#shopCode')?.addEventListener('input',saveVisitFields);
   $('#visitComment')?.addEventListener('input',saveVisitFields);
   $('#gps')?.addEventListener('click',()=>navigator.geolocation?navigator.geolocation.getCurrentPosition(async p=>{saveVisitFields({latitude:p.coords.latitude,longitude:p.coords.longitude,gps_accuracy:p.coords.accuracy});await flushSync();toast('Местоположение сохранено');renderWizard()},e=>toast('Не удалось определить местоположение: '+e.message),{enableHighAccuracy:true,timeout:20000,maximumAge:30000}):toast('Геолокация не поддерживается'));
