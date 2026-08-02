@@ -4,8 +4,8 @@ from fastapi.middleware.gzip import GZipMiddleware
 from sqlalchemy import select
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine
-from app.models import Role, User
-from app.routers import admin, audits, auth
+from app.models import Role, User, QuestionSetting, ScoreSetting
+from app.routers import admin, audits, auth, extras
 from app.security import hash_password
 
 settings = get_settings()
@@ -22,6 +22,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(audits.router)
+app.include_router(extras.router)
 
 
 @app.on_event("startup")
@@ -31,6 +32,12 @@ def startup():
         if not db.scalar(select(User).where(User.login == settings.seed_admin_login)):
             db.add(User(full_name="Администратор", login=settings.seed_admin_login, password_hash=hash_password(settings.seed_admin_password), role=Role.admin))
             db.commit()
+        from app.questionnaire import QUESTIONS
+        for i,q in enumerate(QUESTIONS):
+            if not db.get(QuestionSetting,q["key"]):
+                db.add(QuestionSetting(key=q["key"],section=q["section"],step=q["step"],weight=q["weight"],text_ru=q["text"],sort_order=i,is_active=True))
+        if not db.get(ScoreSetting,1): db.add(ScoreSetting(id=1,confident_min=65,master_min=85))
+        db.commit()
 
 
 @app.get("/health")

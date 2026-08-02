@@ -110,3 +110,44 @@ class Answer(Base):
     answer_value: Mapped[str] = mapped_column(String(8), nullable=False)
     comment: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ActivityLog(Base):
+    __tablename__ = "activity_logs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    entity_type: Mapped[str | None] = mapped_column(String(80))
+    entity_id: Mapped[str | None] = mapped_column(String(80))
+    details: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    user: Mapped[User | None] = relationship()
+
+
+class QuestionSetting(Base):
+    __tablename__ = "question_settings"
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    section: Mapped[str] = mapped_column(String(160), nullable=False)
+    step: Mapped[int] = mapped_column(Integer, nullable=False)
+    weight: Mapped[float] = mapped_column(Float, nullable=False)
+    text_ru: Mapped[str] = mapped_column(Text, nullable=False)
+    text_uz: Mapped[str | None] = mapped_column(Text)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class ScoreSetting(Base):
+    __tablename__ = "score_settings"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    confident_min: Mapped[float] = mapped_column(Float, default=65.0)
+    master_min: Mapped[float] = mapped_column(Float, default=85.0)
+
+
+class VisitTiming(Base):
+    __tablename__ = "visit_timings"
+    __table_args__ = (UniqueConstraint("audit_id", "visit_number"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    audit_id: Mapped[str] = mapped_column(ForeignKey("audits.id", ondelete="CASCADE"), nullable=False, index=True)
+    visit_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime)

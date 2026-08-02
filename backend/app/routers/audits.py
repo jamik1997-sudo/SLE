@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 from app.database import get_db
-from app.models import Answer, Audit, AuditStatus, Employee, Role, User, Visit
+from app.models import Answer, Audit, AuditStatus, Employee, Role, User, Visit, QuestionSetting, ScoreSetting, ActivityLog
 from app.questionnaire import QUESTION_MAP, QUESTIONS
 from app.schemas import AnswerSave, AuditCreate, ProgressSave, VisitSave, BatchSyncIn
 from app.security import current_user
@@ -17,7 +17,7 @@ def allowed_regions(user: User) -> set[str]:
 
 
 def load_audit(db: Session, audit_id: str) -> Audit:
-    audit = db.scalar(select(Audit).where(Audit.id == audit_id).options(selectinload(Audit.visits), selectinload(Audit.answers), selectinload(Audit.employee), selectinload(Audit.region)))
+    audit = db.scalar(select(Audit).where(Audit.id == audit_id).options(selectinload(Audit.visits), selectinload(Audit.answers), selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor)))
     if not audit:
         raise HTTPException(404, "Аудит не найден")
     return audit
@@ -44,8 +44,10 @@ def ensure_access(user: User, audit: Audit, *, write: bool = False):
 
 
 @router.get("/questionnaire")
-def questionnaire(_: User = Depends(current_user)):
-    return QUESTIONS
+def questionnaire(db: Session = Depends(get_db), _: User = Depends(current_user)):
+    rows=db.scalars(select(QuestionSetting).where(QuestionSetting.is_active==True).order_by(QuestionSetting.sort_order)).all()
+    if not rows: return QUESTIONS
+    return [{"key":q.key,"section":q.section,"step":q.step,"weight":q.weight,"allow_na":False,"text":q.text_ru,"text_uz":q.text_uz,"is_active":q.is_active} for q in rows]
 
 
 @router.get("/regions")
@@ -75,11 +77,67 @@ def employees(region_id: str | None = None, db: Session = Depends(get_db), user:
 
 @router.get("")
 def list_audits(limit: int = 100, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    stmt = select(Audit).options(selectinload(Audit.employee), selectinload(Audit.region)).order_by(Audit.last_saved_at.desc())
+    stmt = select(Audit).options(selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor)).order_by(Audit.last_saved_at.desc())
     if user.role == Role.leader:
         stmt = stmt.where(Audit.region_id.in_(allowed_regions(user)))
     rows = db.scalars(stmt.limit(min(max(limit, 1), 500))).all()
-    return [{"id":a.id,"audit_date":a.audit_date,"status":a.status.value,"current_visit":a.current_visit,"current_step":a.current_step,"total_percent":a.total_percent,"level":a.level,"employee_name":a.employee.full_name,"region_name":a.region.name,"last_saved_at":a.last_saved_at,"auditor_id":a.auditor_id,"is_mine":a.auditor_id == user.id} for a in rows]
+    return [{"id":a.id,"audit_date":a.audit_date,"status":a.status.value,"current_visit":a.current_visit,"current_step":a.current_step,"total_percent":a.total_percent,"level":a.level,"employee_name":a.employee.full_name,"region_name":a.region.name,"last_saved_at":a.last_saved_at,"auditor_id":a.auditor_id,"auditor_name":a.auditor.full_name,"is_mine":a.auditor_id == user.id} for a in rows]
+
+
+@router.get("/dashboard")
+def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    stmt = (
+        select(Audit)
+        .options(selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor))
+        .where(Audit.status == AuditStatus.completed)
+        .order_by(Audit.submitted_at.desc())
+    )
+    if user.role == Role.leader:
+        stmt = stmt.where(Audit.region_id.in_(allowed_regions(user)))
+    rows = db.scalars(stmt).all()
+
+    total = len(rows)
+    average = round(sum((a.total_percent or 0) for a in rows) / total, 1) if total else 0
+    levels = {"Базовый": 0, "Уверенный": 0, "Мастер": 0}
+    region_map = {}
+    employee_map = {}
+    month_map = {}
+    for a in rows:
+        levels[a.level or "Базовый"] = levels.get(a.level or "Базовый", 0) + 1
+        region = region_map.setdefault(a.region.name, {"sum": 0.0, "count": 0})
+        region["sum"] += a.total_percent or 0
+        region["count"] += 1
+        employee = employee_map.setdefault(a.employee.full_name, {"sum": 0.0, "count": 0, "region": a.region.name})
+        employee["sum"] += a.total_percent or 0
+        employee["count"] += 1
+        month_key = a.audit_date.strftime("%Y-%m")
+        month = month_map.setdefault(month_key, {"sum": 0.0, "count": 0})
+        month["sum"] += a.total_percent or 0
+        month["count"] += 1
+
+    regions = sorted([
+        {"name": name, "average": round(v["sum"] / v["count"], 1), "count": v["count"]}
+        for name, v in region_map.items()
+    ], key=lambda x: (-x["average"], x["name"]))
+    employees = sorted([
+        {"name": name, "region": v["region"], "average": round(v["sum"] / v["count"], 1), "count": v["count"]}
+        for name, v in employee_map.items()
+    ], key=lambda x: (-x["average"], -x["count"], x["name"]))[:10]
+    months = sorted([
+        {"month": name, "average": round(v["sum"] / v["count"], 1), "count": v["count"]}
+        for name, v in month_map.items()
+    ], key=lambda x: x["month"])[-12:]
+    recent = [
+        {
+            "id": a.id, "audit_date": a.audit_date, "employee_name": a.employee.full_name,
+            "region_name": a.region.name, "auditor_name": a.auditor.full_name,
+            "total_percent": a.total_percent, "level": a.level,
+        } for a in rows[:10]
+    ]
+    return {
+        "total": total, "average": average, "levels": levels, "regions": regions,
+        "employees": employees, "months": months, "recent": recent,
+    }
 
 
 @router.post("")
@@ -91,13 +149,11 @@ def create_audit(payload: AuditCreate, db: Session = Depends(get_db), user: User
     if employee.region_id != region_id:
         raise HTTPException(400, "Сотрудник относится к другому региону")
     ensure_region_access(user, region_id)
-    existing = db.scalar(select(Audit).where(Audit.auditor_id == user.id, Audit.status.in_([AuditStatus.draft, AuditStatus.in_progress])))
-    if existing:
-        raise HTTPException(409, detail={"message":"Есть незавершённый аудит","audit_id":existing.id})
     audit = Audit(audit_date=payload.audit_date, employee_id=employee.id, region_id=region_id, auditor_id=user.id)
     db.add(audit); db.flush()
     for n in range(1, 6):
         db.add(Visit(audit_id=audit.id, visit_number=n))
+    db.add(ActivityLog(user_id=user.id,action="Создал аудит",entity_type="audit",entity_id=audit.id,details=employee.full_name))
     db.commit()
     return {"id": audit.id}
 
@@ -194,15 +250,19 @@ def batch_sync(audit_id: str, payload: BatchSyncIn, db: Session = Depends(get_db
 @router.post("/{audit_id}/submit")
 def submit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
     audit = load_audit(db, audit_id); ensure_access(user, audit, write=True)
+    qrows = db.scalars(select(QuestionSetting).where(QuestionSetting.is_active == True).order_by(QuestionSetting.sort_order)).all()
+    questions = [{"key":q.key,"section":q.section,"step":q.step,"weight":q.weight,"is_active":q.is_active} for q in qrows] or QUESTIONS
     answer_map = {(a.visit_number, a.question_key): a for a in audit.answers}
     missing = []
-    for q in QUESTIONS:
+    for q in questions:
         visits = [0] if q["step"] in (0, 8) else range(1, 6)
         for n in visits:
             if (n, q["key"]) not in answer_map: missing.append(f"{n}:{q['key']}")
     for v in audit.visits:
-        if not v.shop_code or v.latitude is None or v.longitude is None: missing.append(f"visit:{v.visit_number}")
+        if not v.shop_code: missing.append(f"visit:{v.visit_number}")
     if missing: raise HTTPException(422, detail={"message":"Аудит заполнен не полностью","missing":missing})
-    total, percent, level, sections = calculate(audit)
+    ss = db.get(ScoreSetting, 1) or ScoreSetting(id=1)
+    total, percent, level, sections = calculate(audit, questions, ss.confident_min, ss.master_min)
     audit.total_score=total; audit.total_percent=percent; audit.level=level; audit.status=AuditStatus.completed; audit.submitted_at=datetime.utcnow(); audit.last_saved_at=datetime.utcnow()
+    db.add(ActivityLog(user_id=user.id,action="Завершил аудит",entity_type="audit",entity_id=audit.id,details=f"{percent}% {level}"))
     db.commit(); return {"total_score":total,"total_percent":percent,"level":level,"sections":sections}
