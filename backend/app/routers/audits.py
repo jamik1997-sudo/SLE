@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.database import get_db
 from app.models import Answer, Audit, AuditStatus, Employee, Role, User, Visit
 from app.questionnaire import QUESTION_MAP, QUESTIONS
-from app.schemas import AnswerSave, AuditCreate, ProgressSave, VisitSave
+from app.schemas import AnswerSave, AuditCreate, ProgressSave, VisitSave, BatchSyncIn
 from app.security import current_user
 from app.services.scoring import calculate
 
@@ -18,6 +18,13 @@ def allowed_regions(user: User) -> set[str]:
 
 def load_audit(db: Session, audit_id: str) -> Audit:
     audit = db.scalar(select(Audit).where(Audit.id == audit_id).options(selectinload(Audit.visits), selectinload(Audit.answers), selectinload(Audit.employee), selectinload(Audit.region)))
+    if not audit:
+        raise HTTPException(404, "Аудит не найден")
+    return audit
+
+
+def load_audit_basic(db: Session, audit_id: str) -> Audit:
+    audit = db.get(Audit, audit_id)
     if not audit:
         raise HTTPException(404, "Аудит не найден")
     return audit
@@ -67,11 +74,11 @@ def employees(region_id: str | None = None, db: Session = Depends(get_db), user:
 
 
 @router.get("")
-def list_audits(db: Session = Depends(get_db), user: User = Depends(current_user)):
+def list_audits(limit: int = 100, db: Session = Depends(get_db), user: User = Depends(current_user)):
     stmt = select(Audit).options(selectinload(Audit.employee), selectinload(Audit.region)).order_by(Audit.last_saved_at.desc())
     if user.role == Role.leader:
         stmt = stmt.where(Audit.region_id.in_(allowed_regions(user)))
-    rows = db.scalars(stmt).all()
+    rows = db.scalars(stmt.limit(min(max(limit, 1), 500))).all()
     return [{"id":a.id,"audit_date":a.audit_date,"status":a.status.value,"current_visit":a.current_visit,"current_step":a.current_step,"total_percent":a.total_percent,"level":a.level,"employee_name":a.employee.full_name,"region_name":a.region.name,"last_saved_at":a.last_saved_at,"auditor_id":a.auditor_id,"is_mine":a.auditor_id == user.id} for a in rows]
 
 
@@ -110,7 +117,7 @@ def get_audit(audit_id: str, db: Session = Depends(get_db), user: User = Depends
 
 @router.put("/{audit_id}/visits/{visit_number}")
 def save_visit(audit_id: str, visit_number: int, payload: VisitSave, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    audit = load_audit(db, audit_id); ensure_access(user, audit, write=True)
+    audit = load_audit_basic(db, audit_id); ensure_access(user, audit, write=True)
     if audit.status == AuditStatus.completed: raise HTTPException(400, "Аудит завершён")
     visit = db.scalar(select(Visit).where(Visit.audit_id == audit.id, Visit.visit_number == visit_number))
     for key, value in payload.model_dump(exclude_unset=True).items(): setattr(visit, key, value)
@@ -121,7 +128,7 @@ def save_visit(audit_id: str, visit_number: int, payload: VisitSave, db: Session
 
 @router.put("/{audit_id}/answer")
 def save_answer(audit_id: str, payload: AnswerSave, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    audit = load_audit(db, audit_id); ensure_access(user, audit, write=True)
+    audit = load_audit_basic(db, audit_id); ensure_access(user, audit, write=True)
     q = QUESTION_MAP.get(payload.question_key)
     if not q: raise HTTPException(400, "Неизвестный вопрос")
     if payload.answer_value not in (["1","0","N/A"] if q["allow_na"] else ["1","0"]): raise HTTPException(400, "Недопустимый ответ")
@@ -137,9 +144,55 @@ def save_answer(audit_id: str, payload: AnswerSave, db: Session = Depends(get_db
 
 @router.put("/{audit_id}/progress")
 def progress(audit_id: str, payload: ProgressSave, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    audit = load_audit(db, audit_id); ensure_access(user, audit, write=True)
+    audit = load_audit_basic(db, audit_id); ensure_access(user, audit, write=True)
     audit.current_visit = payload.current_visit; audit.current_step = payload.current_step; audit.last_saved_at = datetime.utcnow()
     db.commit(); return {"saved": True}
+
+
+@router.put("/{audit_id}/sync")
+def batch_sync(audit_id: str, payload: BatchSyncIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    audit = load_audit_basic(db, audit_id); ensure_access(user, audit, write=True)
+    if audit.status == AuditStatus.completed:
+        raise HTTPException(400, "Аудит завершён")
+
+    if payload.answers:
+        keys = [(a.visit_number, a.question_key) for a in payload.answers]
+        existing = db.scalars(select(Answer).where(Answer.audit_id == audit.id)).all()
+        answer_map = {(a.visit_number, a.question_key): a for a in existing}
+        for item in payload.answers:
+            q = QUESTION_MAP.get(item.question_key)
+            if not q:
+                raise HTTPException(400, f"Неизвестный вопрос: {item.question_key}")
+            allowed = ["1", "0", "N/A"] if q["allow_na"] else ["1", "0"]
+            if item.answer_value not in allowed:
+                raise HTTPException(400, "Недопустимый ответ")
+            if item.answer_value in ["0", "N/A"] and not (item.comment or "").strip():
+                raise HTTPException(422, "Для ответа 0 или N/A обязателен комментарий")
+            obj = answer_map.get((item.visit_number, item.question_key))
+            if not obj:
+                obj = Answer(audit_id=audit.id, visit_number=item.visit_number, question_key=item.question_key, answer_value=item.answer_value)
+                db.add(obj)
+                answer_map[(item.visit_number, item.question_key)] = obj
+            obj.answer_value = item.answer_value
+            obj.comment = item.comment
+
+    if payload.visit_number is not None and payload.visit is not None:
+        visit = db.scalar(select(Visit).where(Visit.audit_id == audit.id, Visit.visit_number == payload.visit_number))
+        if not visit:
+            raise HTTPException(404, "Визит не найден")
+        for key, value in payload.visit.model_dump(exclude_unset=True).items():
+            setattr(visit, key, value)
+        if payload.visit.latitude is not None:
+            visit.location_received_at = datetime.utcnow()
+
+    if payload.current_visit is not None:
+        audit.current_visit = payload.current_visit
+    if payload.current_step is not None:
+        audit.current_step = payload.current_step
+    audit.status = AuditStatus.in_progress
+    audit.last_saved_at = datetime.utcnow()
+    db.commit()
+    return {"saved": True, "at": audit.last_saved_at}
 
 
 @router.post("/{audit_id}/submit")

@@ -81,3 +81,11 @@ class AuditListOut(BaseModel):
     employee_name: str
     region_name: str
     last_saved_at: datetime
+
+
+class BatchSyncIn(BaseModel):
+    answers: list[AnswerSave] = []
+    visit_number: int | None = None
+    visit: VisitSave | None = None
+    current_visit: int | None = None
+    current_step: int | None = None

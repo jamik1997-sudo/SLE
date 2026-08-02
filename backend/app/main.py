@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from sqlalchemy import select
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine
@@ -9,6 +10,7 @@ from app.security import hash_password
 
 settings = get_settings()
 app = FastAPI(title="SLE Audit API", version="1.0.0")
+app.add_middleware(GZipMiddleware, minimum_size=700)
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_list, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.include_router(auth.router)
 app.include_router(admin.router)
@@ -27,3 +29,8 @@ def startup():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/")
+def root():
+    return {"service": "SLE Audit API", "status": "ok"}
