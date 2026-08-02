@@ -1,3 +1,4 @@
+// SLE frontend performance build v2.7
 const API=(window.SLE_CONFIG?.API_URL||'').replace(/\/$/,'');
 const app=document.getElementById('app');
 const state={
@@ -12,26 +13,64 @@ const $$=(s,r=document)=>[...r.querySelectorAll(s)];
 
 function toast(msg){const t=$('#toast');t.textContent=msg;t.hidden=false;setTimeout(()=>t.hidden=true,3200)}
 function authHeaders(){return state.token?{'Authorization':`Bearer ${state.token}`}: {}}
-async function api(path,opt={}){
-  const controller=new AbortController();
-  const timeout=setTimeout(()=>controller.abort(),opt.timeout||25000);
-  const headers={...authHeaders(),...(opt.headers||{})};
-  if(opt.body!=null)headers['Content-Type']='application/json';
-  let res;
-  try{res=await fetch(API+path,{...opt,headers,signal:controller.signal})}
-  catch(e){if(e.name==='AbortError')throw new Error('Сервер отвечает слишком долго');throw e}
-  finally{clearTimeout(timeout)}
-  let data={};try{data=await res.json()}catch{}
-  if(!res.ok){
-    let message=`Ошибка ${res.status}`;
-    if(typeof data.detail==='string')message=data.detail;
-    else if(Array.isArray(data.detail))message=data.detail.map(x=>`${(x.loc||[]).slice(1).join('.')||'поле'}: ${x.msg}`).join('; ');
-    else if(data.detail?.message)message=data.detail.message;
-    else if(data.message)message=data.message;
-    console.error('API error',path,data);throw new Error(message);
-  }
-  return data;
+let wakeRequests=0;
+function setServerWake(show){
+  const el=document.getElementById('serverWake');
+  if(!el)return;
+  if(show){wakeRequests++;el.hidden=false}else{wakeRequests=Math.max(0,wakeRequests-1);if(!wakeRequests)el.hidden=true}
 }
+function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
+async function api(path,opt={}){
+  const method=(opt.method||'GET').toUpperCase();
+  const retryable=method==='GET'||method==='PUT'||path==='/auth/login';
+  const attempts=retryable?4:1;
+  let lastError;
+  for(let attempt=0;attempt<attempts;attempt++){
+    const controller=new AbortController();
+    const timeoutMs=opt.timeout||(attempt===0?12000:25000);
+    const timeout=setTimeout(()=>controller.abort(),timeoutMs);
+    const headers={...authHeaders(),...(opt.headers||{})};
+    if(opt.body!=null)headers['Content-Type']='application/json';
+    try{
+      if(attempt>0)setServerWake(true);
+      const res=await fetch(API+path,{...opt,headers,signal:controller.signal,cache:'no-store'});
+      let data={};try{data=await res.json()}catch{}
+      if(res.ok)return data;
+      if(retryable&&[502,503,504].includes(res.status)&&attempt<attempts-1){
+        lastError=new Error('Сервер запускается');
+        await sleep([800,1600,3000][attempt]||3000);
+        continue;
+      }
+      let message=`Ошибка ${res.status}`;
+      if(typeof data.detail==='string')message=data.detail;
+      else if(Array.isArray(data.detail))message=data.detail.map(x=>`${(x.loc||[]).slice(1).join('.')||'поле'}: ${x.msg}`).join('; ');
+      else if(data.detail?.message)message=data.detail.message;
+      else if(data.message)message=data.message;
+      console.error('API error',path,data);throw new Error(message);
+    }catch(e){
+      lastError=e.name==='AbortError'?new Error('Сервер запускается слишком долго'):e;
+      if(!retryable||attempt===attempts-1)throw lastError;
+      await sleep([800,1600,3000][attempt]||3000);
+    }finally{
+      clearTimeout(timeout);
+      if(attempt>0)setServerWake(false);
+    }
+  }
+  throw lastError||new Error('Сервер недоступен');
+}
+async function wakeServer(){
+  try{
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),7000);
+    await fetch(API+'/health',{signal:controller.signal,cache:'no-store'});
+    clearTimeout(timer);
+  }catch{}
+}
+function startKeepAlive(){
+  if(window.__sleKeepAlive)return;
+  window.__sleKeepAlive=setInterval(()=>{if(document.visibilityState==='visible'&&navigator.onLine)wakeServer()},9*60*1000);
+}
+
 function esc(v=''){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function roleName(role){return role==='admin'?'Администратор':role==='manager'?'Менеджер':'Руководитель'}
 function applyTheme(){document.documentElement.dataset.theme=state.theme;document.querySelector('meta[name="theme-color"]')?.setAttribute('content',state.theme==='dark'?'#111318':'#ffd400')}
@@ -41,10 +80,10 @@ function shell(content){
   app.innerHTML=`<div class="shell"><header class="topbar"><div class="brand"><i></i>SLE</div>${profile}</header><div class="container">${content}</div></div>`;
   $('#logout')?.addEventListener('click',logout);$('#themeToggle')?.addEventListener('click',toggleTheme);$('#changePassword')?.addEventListener('click',changePasswordPage);
 }
-function logout(){localStorage.removeItem('sle_token');state.token='';state.me=null;renderLogin()}
+function logout(){localStorage.removeItem('sle_token');localStorage.removeItem('sle_me');state.token='';state.me=null;renderLogin()}
 function syncStatus(){$('#offline')?.toggleAttribute('hidden',navigator.onLine)}
 async function boot(){
-  applyTheme();try{state.regions=JSON.parse(localStorage.getItem('sle_regions')||'null')}catch{}
+  applyTheme();wakeServer();startKeepAlive();try{state.regions=JSON.parse(localStorage.getItem('sle_regions')||'null')}catch{}
   window.addEventListener('online',syncStatus);window.addEventListener('offline',syncStatus);syncStatus();
   if('serviceWorker' in navigator){
     try{
@@ -69,23 +108,37 @@ async function boot(){
     }
   }
   if(!state.token)return renderLogin();
-  try{state.me=await api('/auth/me');await home()}catch{logout()}
+  try{
+    const cachedMe=localStorage.getItem('sle_me');
+    if(cachedMe){try{state.me=JSON.parse(cachedMe)}catch{}}
+    if(state.me)home();
+    state.me=await api('/auth/me');localStorage.setItem('sle_me',JSON.stringify(state.me));
+    if(!document.querySelector('.shell'))await home();
+  }catch{logout()}
 }
 function renderLogin(){
   app.innerHTML=`<div class="login"><div class="login-head"><div class="login-logo">SLE</div><button class="icon-btn" id="themeToggle">${state.theme==='dark'?'☀️':'🌙'}</button></div><div class="card accent"><h1>Вход</h1><p class="muted">Введите логин и пароль</p><form id="login"><div class="field"><label>Логин</label><input name="login" required autocomplete="username"></div><div class="field" style="margin-top:12px"><label>Пароль</label><input name="password" type="password" required autocomplete="current-password"></div><button class="btn primary full" style="margin-top:16px">Войти</button></form></div></div>`;
   $('#themeToggle').onclick=toggleTheme;
-  $('#login').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{const d=await api('/auth/login',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});state.token=d.access_token;localStorage.setItem('sle_token',state.token);state.me=await api('/auth/me');home()}catch(err){toast(err.message)}};
+  $('#login').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{const d=await api('/auth/login',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});state.token=d.access_token;localStorage.setItem('sle_token',state.token);state.me=await api('/auth/me');localStorage.setItem('sle_me',JSON.stringify(state.me));home()}catch(err){toast(err.message)}};
 }
 function mainNav(active='home'){
   const admin=['admin','manager'].includes(state.me.role)?'<button class="pill" data-page="admin">Управление</button>':'';
   return `<div class="nav"><button class="pill ${active==='search'?'active':''}" data-page="search">Поиск</button><button class="pill ${active==='home'?'active':''}" data-page="home">Главная</button><button class="pill ${active==='dashboard'?'active':''}" data-page="dashboard">Дашборд</button><button class="pill ${active==='history'?'active':''}" data-page="history">Отчёты</button>${admin}${['admin','manager'].includes(state.me.role)?'<button class="pill '+(active==='logs'?'active':'')+'" data-page="logs">Журнал</button>':''}${state.me.role==='admin'?'<button class="pill '+(active==='settings'?'active':'')+'" data-page="settings">Настройки</button>':''}<button class="pill '+(active==='language'?'active':'')+'" id="langToggle">RU/UZ</button></div>`;
 }
-async function home(){
-  try{state.audits=await api('/audits?limit=50')}catch(e){toast(e.message)}
+function renderHome(){
   const drafts=state.audits.filter(a=>['draft','in_progress'].includes(a.status)&&a.is_mine!==false);
   shell(`${mainNav('home')}${drafts.length?`<div class="card accent"><h2>Черновики</h2>${drafts.map(d=>`<div class="visit-row"><span>${esc(d.employee_name)} · ${esc(d.region_name)}</span><span class="actions"><button class="btn primary small" data-resume="${d.id}">Продолжить</button><button class="btn danger small" data-cancel-audit="${d.id}">Отменить</button></span></div>`).join('')}</div>`:''}<div class="card"><h2>Новый аудит</h2><p class="muted">Оценка сотрудника по пяти торговым точкам</p><button class="btn primary" id="newAudit">Начать</button></div><div class="card"><h2>Последние аудиты</h2>${auditTable(state.audits.slice(0,8))}</div>`);
   bindNav();$('#newAudit')?.addEventListener('click',newAuditForm);$$('[data-resume]').forEach(b=>b.onclick=()=>openAudit(b.dataset.resume));bindCancelAuditButtons();
 }
+async function home(){
+  if(!state.audits.length){try{state.audits=JSON.parse(localStorage.getItem('sle_audits_cache')||'[]')}catch{}}
+  renderHome();
+  try{
+    const fresh=await api('/audits?limit=50');
+    state.audits=fresh;localStorage.setItem('sle_audits_cache',JSON.stringify(fresh));renderHome();
+  }catch(e){if(!state.audits.length)toast(e.message)}
+}
+
 function auditTable(rows){
   if(!rows.length)return'<p class="muted">Аудитов пока нет</p>';
   return`<div class="table-wrap"><table class="table"><thead><tr><th>Дата</th><th>Сотрудник</th><th>Регион</th><th>Оценивающий</th><th>Статус</th><th>Результат</th></tr></thead><tbody>${rows.map(a=>`<tr data-open="${a.id}" class="clickable"><td>${esc(a.audit_date)}</td><td>${esc(a.employee_name)}</td><td>${esc(a.region_name)}</td><td>${esc(a.auditor_name||'—')}</td><td><span class="badge ${a.status==='completed'?'ok':'warn'}">${statusName(a.status)}</span></td><td>${a.total_percent==null?'—':a.total_percent+'%'}</td></tr>`).join('')}</tbody></table></div>`;

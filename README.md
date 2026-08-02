@@ -46,3 +46,29 @@
 - CORS применяется и к ответам при внутренних ошибках;
 - добавлено серверное логирование необработанных ошибок;
 - обновлена версия PWA-кэша.
+
+## Performance build v2.7 (Render Free)
+
+This version is optimized for Render Free cold starts and faster deploys.
+
+### Important Render settings
+
+- Root Directory: `backend`
+- Build Command: `pip install --disable-pip-version-check --prefer-binary -r requirements.txt`
+- Start Command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT --no-access-log`
+- Health Check Path: `/health`
+- Environment: `INIT_DB_ON_START=false`
+
+The database is no longer scanned, migrated, and seeded on every cold start.
+For a brand-new database only, temporarily set `INIT_DB_ON_START=true`, deploy once,
+then return it to `false`. Alternatively run `python -m app.init_db` once.
+
+### Vercel settings
+
+- Framework: Other
+- Root Directory: `frontend`
+- Build / Install commands: empty
+- Output Directory: `.`
+
+The frontend now wakes Render in the background, automatically retries safe requests,
+shows cached home data immediately, and keeps the service awake while the app is open.

@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000,https://sle-xi.vercel.app"
     seed_admin_login: str = "admin"
     seed_admin_password: str = "ChangeMe123!"
+    init_db_on_start: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

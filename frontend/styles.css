@@ -21,3 +21,8 @@
   .block-results th:nth-child(2),.block-results td:nth-child(2){width:auto}
   .block-results th:nth-child(3),.block-results td:nth-child(3){min-width:190px;width:auto}
 }
+
+/* Render Free cold-start status */
+.server-wake{position:fixed;left:50%;top:18px;transform:translateX(-50%);z-index:120;display:flex;align-items:center;gap:12px;max-width:min(520px,calc(100vw - 24px));background:var(--surface);color:var(--text);border:1px solid var(--line);border-top:4px solid var(--yellow);border-radius:12px;padding:12px 16px;box-shadow:0 16px 45px rgba(0,0,0,.22)}
+.server-wake[hidden]{display:none}.server-wake strong,.server-wake small{display:block}.server-wake small{color:var(--muted);margin-top:3px}.spinner{width:22px;height:22px;flex:0 0 auto;border:3px solid var(--line);border-top-color:var(--yellow);border-radius:50%;animation:sle-spin .8s linear infinite}@keyframes sle-spin{to{transform:rotate(360deg)}}
+.skeleton{background:linear-gradient(90deg,var(--surface-2),var(--surface),var(--surface-2));background-size:220% 100%;animation:sle-shimmer 1.2s infinite;border-radius:8px;min-height:18px}@keyframes sle-shimmer{to{background-position:-220% 0}}
