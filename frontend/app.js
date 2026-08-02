@@ -46,7 +46,28 @@ function syncStatus(){$('#offline')?.toggleAttribute('hidden',navigator.onLine)}
 async function boot(){
   applyTheme();try{state.regions=JSON.parse(localStorage.getItem('sle_regions')||'null')}catch{}
   window.addEventListener('online',syncStatus);window.addEventListener('offline',syncStatus);syncStatus();
-  if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  if('serviceWorker' in navigator){
+    try{
+      const registration=await navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'});
+      await registration.update();
+
+      let reloading=false;
+      navigator.serviceWorker.addEventListener('controllerchange',()=>{
+        if(reloading)return;
+        reloading=true;
+        window.location.reload();
+      });
+
+      // Check for a new version whenever the app becomes active again.
+      document.addEventListener('visibilitychange',()=>{
+        if(document.visibilityState==='visible')registration.update().catch(()=>{});
+      });
+      window.addEventListener('focus',()=>registration.update().catch(()=>{}));
+      setInterval(()=>registration.update().catch(()=>{}),15*60*1000);
+    }catch(error){
+      console.error('Ошибка регистрации Service Worker:',error);
+    }
+  }
   if(!state.token)return renderLogin();
   try{state.me=await api('/auth/me');await home()}catch{logout()}
 }
@@ -76,8 +97,8 @@ function bindNav(){
 }
 async function history(){
   try{state.audits=await api('/audits?limit=500')}catch(e){return toast(e.message)}
-  shell(`${mainNav('history')}<div class="card"><div class="section-head"><div><h1>Отчёты</h1><p class="muted">Все доступные аудиты</p></div><input id="reportSearch" class="search" placeholder="Поиск по сотруднику или региону"></div><div class="actions"><button class="btn secondary" id="exportCsv">CSV</button><button class="btn secondary" id="printReports">Печать / PDF</button><button class="btn secondary" id="notifyBtn">Уведомления</button><button class="btn primary" id="questionnaireReport">Заполнения опросника</button><button class="btn secondary" id="exportAnswers">Выгрузить ответы</button></div><div id="questionnaireReportBox" class="top-gap"></div><div id="reportTable" class="top-gap">${auditTable(state.audits)}</div></div>`);
-  bindNav();$('#exportCsv').onclick=()=>exportCsv(state.audits);$('#printReports').onclick=()=>window.print();$('#notifyBtn').onclick=enableNotifications;$('#questionnaireReport').onclick=loadQuestionnaireReport;$('#exportAnswers').onclick=exportQuestionnaireAnswers;$('#reportSearch').oninput=e=>{const q=e.target.value.trim().toLowerCase();const rows=state.audits.filter(a=>[a.employee_name,a.region_name,a.auditor_name,a.level].some(v=>String(v||'').toLowerCase().includes(q)));$('#reportTable').innerHTML=auditTable(rows);$$('[data-open]').forEach(r=>r.onclick=()=>openAudit(r.dataset.open))};
+  shell(`${mainNav('history')}<div class="card"><div class="section-head"><div><h1>Отчёты</h1><p class="muted">Все доступные аудиты</p></div><input id="reportSearch" class="search" placeholder="Поиск по сотруднику или региону"></div><div class="actions"><button class="btn secondary" id="exportExcel">Excel</button><button class="btn secondary" id="printReports">Печать / PDF</button><button class="btn secondary" id="notifyBtn">Уведомления</button><button class="btn primary" id="questionnaireReport">Заполнения опросника</button><button class="btn secondary" id="exportAnswers">Выгрузить в Excel</button></div><div id="questionnaireReportBox" class="top-gap"></div><div id="reportTable" class="top-gap">${auditTable(state.audits)}</div></div>`);
+  bindNav();$('#exportExcel').onclick=()=>downloadExcel('/extras/export/audits.xlsx','sle-audits.xlsx');$('#printReports').onclick=()=>window.print();$('#notifyBtn').onclick=enableNotifications;$('#questionnaireReport').onclick=loadQuestionnaireReport;$('#exportAnswers').onclick=exportQuestionnaireAnswers;$('#reportSearch').oninput=e=>{const q=e.target.value.trim().toLowerCase();const rows=state.audits.filter(a=>[a.employee_name,a.region_name,a.auditor_name,a.level].some(v=>String(v||'').toLowerCase().includes(q)));$('#reportTable').innerHTML=auditTable(rows);$$('[data-open]').forEach(r=>r.onclick=()=>openAudit(r.dataset.open))};
 }
 function statBar(label,value,count){return`<div class="stat-row"><div class="stat-label"><span>${esc(label)}</span><strong>${value}%</strong></div><div class="bar"><i style="width:${Math.max(0,Math.min(100,value))}%"></i></div><small>${count} ауд.</small></div>`}
 async function dashboard(){
@@ -158,8 +179,20 @@ async function cancelAudit(id){
 function bindCancelAuditButtons(){$$('[data-cancel-audit]').forEach(b=>b.onclick=()=>cancelAudit(b.dataset.cancelAudit))}
 function reportTableQuestions(rows){if(!rows.length)return'<p class="muted">Нет данных</p>';return `<div class="table-wrap"><table class="table"><tr><th>Раздел</th><th>Вопрос</th><th>Заполнено</th><th>Ожидалось</th><th>Заполнение</th><th>1</th><th>0</th><th>Выполнение</th></tr>${rows.map(x=>`<tr><td>${esc(x.section)}</td><td>${esc(x.text)}</td><td>${x.filled}</td><td>${x.expected}</td><td><strong>${x.completion_percent}%</strong></td><td>${x.ones}</td><td>${x.zeros}</td><td><strong>${x.success_percent}%</strong></td></tr>`).join('')}</table></div>`}
 async function loadQuestionnaireReport(){const box=$('#questionnaireReportBox');box.innerHTML='<div class="card"><p class="muted">Загрузка отчёта…</p></div>';try{const d=await api('/extras/questionnaire-report');box.innerHTML=`<div class="card"><h2>Отчёт по опроснику и заполнениям</h2><div class="kpi-grid"><div class="kpi"><span>Аудитов</span><strong>${d.audit_count}</strong></div><div class="kpi"><span>Ответов</span><strong>${d.total_answers}</strong></div><div class="kpi"><span>Завершено</span><strong>${d.status_counts.completed||0}</strong></div><div class="kpi"><span>В процессе</span><strong>${(d.status_counts.draft||0)+(d.status_counts.in_progress||0)}</strong></div></div>${reportTableQuestions(d.questions)}</div>`}catch(e){box.innerHTML='';toast(e.message)}}
-async function exportQuestionnaireAnswers(){try{toast('Подготовка выгрузки…');const d=await api('/extras/questionnaire-report?include_details=true&limit=3000',{timeout:60000});const head=['ID аудита','Дата','Статус','Регион','Сотрудник','Оценивающий','Визит','Раздел','Вопрос','Ответ','Обновлено'];const rows=d.details.map(x=>[x.audit_id,x.audit_date,statusName(x.status),x.region,x.employee,x.auditor,x.visit_number,x.section,x.question,x.answer,x.updated_at||'']);downloadCsv(head,rows,'sle-questionnaire-fillings.csv')}catch(e){toast(e.message)}}
+async function exportQuestionnaireAnswers(){await downloadExcel('/extras/export/questionnaire.xlsx','sle-questionnaire-report.xlsx')}
 function downloadCsv(head,rows,name){const quote=v=>'"'+String(v??'').replaceAll('"','""')+'"';const csv=[head.map(quote).join(';'),...rows.map(r=>r.map(quote).join(';'))].join('\n');const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+
+async function downloadExcel(path,filename){
+  try{
+    toast('Подготовка Excel…');
+    const res=await fetch(API+path,{headers:authHeaders()});
+    if(!res.ok){let d={};try{d=await res.json()}catch{};throw new Error(typeof d.detail==='string'?d.detail:`Ошибка ${res.status}`)}
+    const blob=await res.blob();
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);a.download=filename;document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1500);toast('Excel-файл загружен');
+  }catch(e){toast(e.message)}
+}
 
 function enableNotifications(){if(!('Notification'in window))return toast('Уведомления не поддерживаются');Notification.requestPermission().then(p=>toast(p==='granted'?'Уведомления включены':'Разрешение не выдано'))}
 

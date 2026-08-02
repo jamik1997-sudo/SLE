@@ -1,7 +1,12 @@
 from datetime import datetime
+from io import BytesIO
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select, or_, func
 from sqlalchemy.orm import Session, selectinload
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
 from app.database import get_db
 from app.models import (ActivityLog, Answer, Audit, AuditStatus, Employee, QuestionSetting, Region, Role, ScoreSetting, User, VisitTiming)
 from app.security import current_user, require_roles
@@ -159,3 +164,132 @@ def questionnaire_report(
         "questions": summary,
         "details": details if include_details else [],
     }
+
+
+def _xlsx_response(workbook: Workbook, filename: str):
+    stream = BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
+
+
+def _style_sheet(ws):
+    header_fill = PatternFill("solid", fgColor="FFD600")
+    header_font = Font(bold=True, color="111111")
+    thin = Side(style="thin", color="D9D9D9")
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = Border(bottom=thin)
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    for col in range(1, ws.max_column + 1):
+        max_len = 0
+        for row in range(1, min(ws.max_row, 500) + 1):
+            value = ws.cell(row, col).value
+            max_len = max(max_len, len(str(value)) if value is not None else 0)
+        ws.column_dimensions[get_column_letter(col)].width = min(max(max_len + 2, 10), 42)
+    for row in ws.iter_rows(min_row=2):
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+
+@router.get("/export/audits.xlsx")
+def export_audits_xlsx(
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    stmt = (
+        select(Audit)
+        .options(selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor))
+        .order_by(Audit.audit_date.desc(), Audit.last_saved_at.desc())
+    )
+    audits = db.scalars(scope(stmt, user)).all()
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Аудиты"
+    ws.append(["Дата", "Сотрудник", "Регион", "Оценивающий", "Статус", "Результат, %", "Уровень", "Начат", "Отправлен"])
+    status_names = {"draft":"Черновик", "in_progress":"В процессе", "completed":"Завершён", "cancelled":"Отменён"}
+    for a in audits:
+        ws.append([
+            a.audit_date,
+            a.employee.full_name if a.employee else "",
+            a.region.name if a.region else "",
+            a.auditor.full_name if a.auditor else "",
+            status_names.get(a.status.value, a.status.value),
+            a.total_percent,
+            a.level or "",
+            a.started_at,
+            a.submitted_at,
+        ])
+    for cell in ws["A"][1:]: cell.number_format = "dd.mm.yyyy"
+    for col in (8, 9):
+        for cell in ws.iter_cols(min_col=col, max_col=col, min_row=2):
+            for c in cell: c.number_format = "dd.mm.yyyy hh:mm"
+    _style_sheet(ws)
+    return _xlsx_response(wb, "sle-audits.xlsx")
+
+
+@router.get("/export/questionnaire.xlsx")
+def export_questionnaire_xlsx(
+    limit: int = 3000,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    stmt = (
+        select(Audit)
+        .options(
+            selectinload(Audit.employee), selectinload(Audit.region),
+            selectinload(Audit.auditor), selectinload(Audit.answers),
+        )
+        .order_by(Audit.audit_date.desc(), Audit.last_saved_at.desc())
+    )
+    audits = db.scalars(scope(stmt, user).limit(min(max(limit, 1), 3000))).all()
+    qrows = db.scalars(select(QuestionSetting).where(QuestionSetting.is_active == True).order_by(QuestionSetting.sort_order)).all()
+    qmap = {q.key: q for q in qrows}
+    stats = {q.key: {"q": q, "filled": 0, "ones": 0, "zeros": 0} for q in qrows}
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Заполнения"
+    ws.append(["ID аудита", "Дата", "Статус", "Регион", "Сотрудник", "Оценивающий", "Визит", "Раздел", "Вопрос", "Ответ", "Обновлено"])
+    status_names = {"draft":"Черновик", "in_progress":"В процессе", "completed":"Завершён", "cancelled":"Отменён"}
+    for audit in audits:
+        for answer in audit.answers:
+            q = qmap.get(answer.question_key)
+            if not q: continue
+            st = stats[q.key]
+            st["filled"] += 1
+            if answer.answer_value == "1": st["ones"] += 1
+            elif answer.answer_value == "0": st["zeros"] += 1
+            ws.append([
+                audit.id, audit.audit_date, status_names.get(audit.status.value, audit.status.value),
+                audit.region.name if audit.region else "", audit.employee.full_name if audit.employee else "",
+                audit.auditor.full_name if audit.auditor else "", answer.visit_number,
+                q.section, q.text_ru, answer.answer_value, answer.updated_at,
+            ])
+    for cell in ws["B"][1:]: cell.number_format = "dd.mm.yyyy"
+    for cell in ws["K"][1:]: cell.number_format = "dd.mm.yyyy hh:mm"
+    _style_sheet(ws)
+
+    sm = wb.create_sheet("Сводка")
+    sm.append(["Раздел", "Вопрос", "Вес", "Заполнено", "Ожидалось", "Заполнение, %", "Ответ 1", "Ответ 0", "Выполнение, %"])
+    audit_count = len(audits)
+    for q in qrows:
+        st = stats[q.key]
+        expected_per_audit = 1 if q.step in (0, 8) else 5
+        expected = audit_count * expected_per_audit
+        completion = round(st["filled"] / expected * 100, 1) if expected else 0
+        success = round(st["ones"] / st["filled"] * 100, 1) if st["filled"] else 0
+        sm.append([q.section, q.text_ru, q.weight, st["filled"], expected, completion, st["ones"], st["zeros"], success])
+    for col in (6, 9):
+        for cell in sm.iter_cols(min_col=col, max_col=col, min_row=2):
+            for c in cell: c.number_format = '0.0"%"'
+    _style_sheet(sm)
+    return _xlsx_response(wb, "sle-questionnaire-report.xlsx")
