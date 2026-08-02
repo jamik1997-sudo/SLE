@@ -57,6 +57,7 @@ class AuditCreate(BaseModel):
 
 class VisitSave(BaseModel):
     shop_code: str | None = None
+    shop_name: str | None = None
     latitude: float | None = None
     longitude: float | None = None
     gps_accuracy: float | None = None

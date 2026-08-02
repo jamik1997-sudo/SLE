@@ -8,7 +8,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 from app.database import get_db
-from app.models import (ActivityLog, Answer, Audit, AuditStatus, Employee, QuestionSetting, Region, Role, ScoreSetting, User, VisitTiming)
+from app.models import (ActivityLog, Answer, Audit, AuditStatus, Employee, QuestionSetting, Region, Role, ScoreSetting, User, Visit, VisitTiming)
 from app.security import current_user, require_roles
 
 router = APIRouter(prefix="/extras", tags=["extras"])
@@ -110,6 +110,7 @@ def questionnaire_report(
             selectinload(Audit.region),
             selectinload(Audit.auditor),
             selectinload(Audit.answers),
+            selectinload(Audit.visits),
         )
         .order_by(Audit.audit_date.desc(), Audit.last_saved_at.desc())
     )
@@ -207,16 +208,18 @@ def export_audits_xlsx(
 ):
     stmt = (
         select(Audit)
-        .options(selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor))
+        .options(selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor), selectinload(Audit.visits))
         .order_by(Audit.audit_date.desc(), Audit.last_saved_at.desc())
     )
     audits = db.scalars(scope(stmt, user)).all()
     wb = Workbook()
     ws = wb.active
     ws.title = "Аудиты"
-    ws.append(["Дата", "Сотрудник", "Регион", "Оценивающий", "Статус", "Результат, %", "Уровень", "Начат", "Отправлен"])
+    ws.append(["Дата", "Сотрудник", "Регион", "Оценивающий", "Статус", "Результат, %", "Уровень", "Торговые точки", "Координаты ТТ", "Начат", "Отправлен"])
     status_names = {"draft":"Черновик", "in_progress":"В процессе", "completed":"Завершён", "cancelled":"Отменён"}
     for a in audits:
+        shop_names = "; ".join(f"{v.visit_number}. {v.shop_name or v.shop_code or '—'}" for v in a.visits)
+        coordinates = "; ".join(f"{v.visit_number}. {v.latitude},{v.longitude}" for v in a.visits if v.latitude is not None and v.longitude is not None)
         ws.append([
             a.audit_date,
             a.employee.full_name if a.employee else "",
@@ -225,14 +228,25 @@ def export_audits_xlsx(
             status_names.get(a.status.value, a.status.value),
             a.total_percent,
             a.level or "",
+            shop_names,
+            coordinates,
             a.started_at,
             a.submitted_at,
         ])
     for cell in ws["A"][1:]: cell.number_format = "dd.mm.yyyy"
-    for col in (8, 9):
+    for col in (10, 11):
         for cell in ws.iter_cols(min_col=col, max_col=col, min_row=2):
             for c in cell: c.number_format = "dd.mm.yyyy hh:mm"
     _style_sheet(ws)
+    loc = wb.create_sheet("Торговые точки")
+    loc.append(["ID аудита", "Дата", "Регион", "Сотрудник", "Оценивающий", "Визит", "Код ТТ", "Название ТТ", "Широта", "Долгота", "Координаты", "Ссылка на карту"])
+    for a in audits:
+        for v in a.visits:
+            coords = f"{v.latitude},{v.longitude}" if v.latitude is not None and v.longitude is not None else ""
+            loc.append([a.id, a.audit_date, a.region.name if a.region else "", a.employee.full_name if a.employee else "", a.auditor.full_name if a.auditor else "", v.visit_number, v.shop_code, v.shop_name, v.latitude, v.longitude, coords, f"https://maps.google.com/?q={coords}" if coords else ""])
+            if coords:
+                cell = loc.cell(loc.max_row, 12); cell.hyperlink = cell.value; cell.style = "Hyperlink"
+    _style_sheet(loc)
     return _xlsx_response(wb, "sle-audits.xlsx")
 
 
@@ -246,7 +260,7 @@ def export_questionnaire_xlsx(
         select(Audit)
         .options(
             selectinload(Audit.employee), selectinload(Audit.region),
-            selectinload(Audit.auditor), selectinload(Audit.answers),
+            selectinload(Audit.auditor), selectinload(Audit.answers), selectinload(Audit.visits),
         )
         .order_by(Audit.audit_date.desc(), Audit.last_saved_at.desc())
     )
@@ -258,7 +272,7 @@ def export_questionnaire_xlsx(
     wb = Workbook()
     ws = wb.active
     ws.title = "Заполнения"
-    ws.append(["ID аудита", "Дата", "Статус", "Регион", "Сотрудник", "Оценивающий", "Визит", "Раздел", "Вопрос", "Ответ", "Обновлено"])
+    ws.append(["ID аудита", "Дата", "Статус", "Регион", "Сотрудник", "Оценивающий", "Визит", "Код ТТ", "Название ТТ", "Широта", "Долгота", "Раздел", "Вопрос", "Ответ", "Обновлено"])
     status_names = {"draft":"Черновик", "in_progress":"В процессе", "completed":"Завершён", "cancelled":"Отменён"}
     for audit in audits:
         for answer in audit.answers:
@@ -268,14 +282,16 @@ def export_questionnaire_xlsx(
             st["filled"] += 1
             if answer.answer_value == "1": st["ones"] += 1
             elif answer.answer_value == "0": st["zeros"] += 1
+            visit = next((v for v in audit.visits if v.visit_number == answer.visit_number), None)
             ws.append([
                 audit.id, audit.audit_date, status_names.get(audit.status.value, audit.status.value),
                 audit.region.name if audit.region else "", audit.employee.full_name if audit.employee else "",
                 audit.auditor.full_name if audit.auditor else "", answer.visit_number,
+                visit.shop_code if visit else "", visit.shop_name if visit else "", visit.latitude if visit else None, visit.longitude if visit else None,
                 q.section, q.text_ru, answer.answer_value, answer.updated_at,
             ])
     for cell in ws["B"][1:]: cell.number_format = "dd.mm.yyyy"
-    for cell in ws["K"][1:]: cell.number_format = "dd.mm.yyyy hh:mm"
+    for cell in ws["O"][1:]: cell.number_format = "dd.mm.yyyy hh:mm"
     _style_sheet(ws)
 
     sm = wb.create_sheet("Сводка")

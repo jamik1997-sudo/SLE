@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from sqlalchemy import select
+from sqlalchemy import select, text
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine
 from app.models import Role, User, QuestionSetting, ScoreSetting
@@ -28,6 +28,14 @@ app.include_router(extras.router)
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
+    # Lightweight migration for existing installations.
+    with engine.begin() as conn:
+        if engine.dialect.name == "postgresql":
+            conn.execute(text("ALTER TABLE visits ADD COLUMN IF NOT EXISTS shop_name VARCHAR(200)"))
+        elif engine.dialect.name == "sqlite":
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(visits)"))}
+            if "shop_name" not in cols:
+                conn.execute(text("ALTER TABLE visits ADD COLUMN shop_name VARCHAR(200)"))
     with SessionLocal() as db:
         if not db.scalar(select(User).where(User.login == settings.seed_admin_login)):
             db.add(User(full_name="Администратор", login=settings.seed_admin_login, password_hash=hash_password(settings.seed_admin_password), role=Role.admin))

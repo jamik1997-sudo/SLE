@@ -85,7 +85,7 @@ def list_audits(limit: int = 100, db: Session = Depends(get_db), user: User = De
 
 
 @router.get("/dashboard")
-def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user)):
+def dashboard(region_id: str | None = None, auditor_id: str | None = None, employee_id: str | None = None, month: str | None = None, db: Session = Depends(get_db), user: User = Depends(current_user)):
     stmt = (
         select(Audit)
         .options(selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor))
@@ -94,6 +94,22 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
     )
     if user.role == Role.leader:
         stmt = stmt.where(Audit.region_id.in_(allowed_regions(user)))
+    if region_id:
+        ensure_region_access(user, region_id)
+        stmt = stmt.where(Audit.region_id == region_id)
+    if auditor_id:
+        stmt = stmt.where(Audit.auditor_id == auditor_id)
+    if employee_id:
+        stmt = stmt.where(Audit.employee_id == employee_id)
+    if month:
+        try:
+            year, month_num = map(int, month.split("-"))
+            from datetime import date
+            start = date(year, month_num, 1)
+            end = date(year + (month_num == 12), 1 if month_num == 12 else month_num + 1, 1)
+            stmt = stmt.where(Audit.audit_date >= start, Audit.audit_date < end)
+        except Exception as error:
+            raise HTTPException(422, "Месяц должен быть в формате ГГГГ-ММ") from error
     rows = db.scalars(stmt).all()
 
     total = len(rows)
@@ -134,9 +150,34 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
             "total_percent": a.total_percent, "level": a.level,
         } for a in rows[:10]
     ]
+    region_stmt = select(Region).where(Region.is_active == True).order_by(Region.name)
+    if user.role == Role.leader:
+        region_stmt = region_stmt.where(Region.id.in_(allowed_regions(user)))
+    option_regions = db.scalars(region_stmt).all()
+    auditor_stmt = select(User).where(User.is_active == True, User.role.in_([Role.leader, Role.manager])).order_by(User.full_name)
+    if user.role == Role.leader:
+        auditor_stmt = auditor_stmt.where(User.id == user.id)
+    option_auditors = db.scalars(auditor_stmt).all()
+    employee_stmt = select(Employee).where(Employee.is_active == True).order_by(Employee.full_name)
+    if user.role == Role.leader:
+        employee_stmt = employee_stmt.where(Employee.region_id.in_(allowed_regions(user)))
+    if region_id:
+        employee_stmt = employee_stmt.where(Employee.region_id == region_id)
+    option_employees = db.scalars(employee_stmt).all()
+    month_stmt = select(Audit).where(Audit.status == AuditStatus.completed)
+    if user.role == Role.leader:
+        month_stmt = month_stmt.where(Audit.region_id.in_(allowed_regions(user)))
+    month_options = sorted({a.audit_date.strftime("%Y-%m") for a in db.scalars(month_stmt).all()}, reverse=True)
     return {
         "total": total, "average": average, "levels": levels, "regions": regions,
         "employees": employees, "months": months, "recent": recent,
+        "filters": {
+            "regions": [{"id": x.id, "name": x.name} for x in option_regions],
+            "auditors": [{"id": x.id, "name": x.full_name} for x in option_auditors],
+            "employees": [{"id": x.id, "name": x.full_name, "region_id": x.region_id} for x in option_employees],
+            "months": month_options,
+            "selected": {"region_id": region_id, "auditor_id": auditor_id, "employee_id": employee_id, "month": month},
+        },
     }
 
 
@@ -166,7 +207,7 @@ def get_audit(audit_id: str, db: Session = Depends(get_db), user: User = Depends
         "employee_id":audit.employee_id,"employee_name":audit.employee.full_name,"status":audit.status.value,
         "current_visit":audit.current_visit,"current_step":audit.current_step,"total_score":audit.total_score,
         "total_percent":audit.total_percent,"level":audit.level,
-        "visits":[{"visit_number":v.visit_number,"shop_code":v.shop_code,"latitude":v.latitude,"longitude":v.longitude,"gps_accuracy":v.gps_accuracy,"comment":v.comment} for v in audit.visits],
+        "visits":[{"visit_number":v.visit_number,"shop_code":v.shop_code,"shop_name":v.shop_name,"latitude":v.latitude,"longitude":v.longitude,"gps_accuracy":v.gps_accuracy,"comment":v.comment} for v in audit.visits],
         "answers":[{"visit_number":a.visit_number,"question_key":a.question_key,"answer_value":a.answer_value,"comment":a.comment} for a in audit.answers],
     }
 

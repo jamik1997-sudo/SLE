@@ -93,6 +93,7 @@ class Visit(Base):
     audit_id: Mapped[str] = mapped_column(ForeignKey("audits.id", ondelete="CASCADE"), nullable=False)
     visit_number: Mapped[int] = mapped_column(Integer, nullable=False)
     shop_code: Mapped[str | None] = mapped_column(String(100))
+    shop_name: Mapped[str | None] = mapped_column(String(200))
     latitude: Mapped[float | None] = mapped_column(Float)
     longitude: Mapped[float | None] = mapped_column(Float)
     gps_accuracy: Mapped[float | None] = mapped_column(Float)
