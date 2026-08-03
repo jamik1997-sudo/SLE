@@ -1,4 +1,4 @@
-# SLE Audit v3.0
+# SLE Audit v3.1
 
 Чистая модульная архитектура без npm и Node.js.
 
@@ -8,7 +8,7 @@
 - `frontend/js/pages/auth.js` — авторизация и запуск приложения.
 - `frontend/js/pages/home.js` — главная, навигация, поиск, карточки сотрудников, журнал и настройки.
 - `frontend/js/pages/reports.js` — история, Dashboard, фильтры и отчёты.
-- `frontend/js/pages/audit.js` — мастер опроса, GPS, QR, автосохранение и завершение.
+- `frontend/js/pages/audit.js` — мастер опроса, GPS, ручной ввод кода ТТ, автосохранение и завершение.
 - `frontend/js/pages/admin.js` — регионы, сотрудники, руководители, пользователи, пароль и Excel.
 - `backend/app/routers/` — отдельные API-модули авторизации, аудитов, администрирования и отчётов.
 

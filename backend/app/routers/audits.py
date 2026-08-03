@@ -206,21 +206,60 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
         {"month": name, "average": round(v["sum"] / v["count"], 1), "count": v["count"]}
         for name, v in month_map.items()
     ], key=lambda x: x["month"])[-12:]
+    # Each trading point is returned as a separate row in the recent audits table.
     recent = []
     for a in rows[:10]:
-        section_scores = {}
+        answers_by_visit = {}
         for ans in a.answers:
-            q=qmap.get(ans.question_key)
-            if not q or q.step in (0,8): continue
-            name=merged_section(q.section); bucket=section_scores.setdefault(name,{"earned":0.0,"possible":0.0})
-            bucket["possible"] += float(q.weight or 0)
-            if ans.answer_value=="1": bucket["earned"] += float(q.weight or 0)
-        growth="—"
-        if section_scores:
-            growth=min(section_scores.items(), key=lambda x: (x[1]["earned"]/x[1]["possible"] if x[1]["possible"] else 1))[0]
-        codes=", ".join(v.shop_code or "—" for v in a.visits)
-        locations=[{"visit":v.visit_number,"code":v.shop_code or "—","latitude":v.latitude,"longitude":v.longitude,"url":f"https://maps.google.com/?q={v.latitude},{v.longitude}" if v.latitude is not None and v.longitude is not None else None} for v in a.visits]
-        recent.append({"id":a.id,"audit_date":a.audit_date,"shop_codes":codes,"total_percent":a.total_percent,"growth_zone":growth,"locations":locations})
+            answers_by_visit.setdefault(ans.visit_number, []).append(ans)
+
+        for visit in sorted(a.visits, key=lambda item: item.visit_number):
+            visit_answers = answers_by_visit.get(visit.visit_number, [])
+            section_scores = {}
+            earned = 0.0
+            possible = 0.0
+
+            for ans in visit_answers:
+                q = qmap.get(ans.question_key)
+                if not q or q.step in (0, 8):
+                    continue
+                weight = float(q.weight or 0)
+                section_name = merged_section(q.section)
+                bucket = section_scores.setdefault(section_name, {"earned": 0.0, "possible": 0.0})
+                bucket["possible"] += weight
+                possible += weight
+                if ans.answer_value == "1":
+                    bucket["earned"] += weight
+                    earned += weight
+
+            growth = "—"
+            if section_scores:
+                growth = min(
+                    section_scores.items(),
+                    key=lambda item: (
+                        item[1]["earned"] / item[1]["possible"]
+                        if item[1]["possible"] else 1
+                    ),
+                )[0]
+
+            visit_percent = round(earned / possible * 100, 1) if possible else 0
+            location_url = (
+                f"https://maps.google.com/?q={visit.latitude},{visit.longitude}"
+                if visit.latitude is not None and visit.longitude is not None
+                else None
+            )
+            recent.append({
+                "id": a.id,
+                "visit_number": visit.visit_number,
+                "audit_date": a.audit_date,
+                "shop_code": visit.shop_code or "—",
+                "total_percent": visit_percent,
+                "audit_percent": a.total_percent,
+                "growth_zone": growth,
+                "latitude": visit.latitude,
+                "longitude": visit.longitude,
+                "location_url": location_url,
+            })
     region_stmt = select(Region).where(Region.is_active == True).order_by(Region.name)
     if user.role == Role.leader:
         region_stmt = region_stmt.where(Region.id.in_(allowed_regions(user)))
