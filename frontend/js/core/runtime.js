@@ -87,7 +87,7 @@ async function api(path,opt={}){
     if(inflightGets.has(cacheKey))return inflightGets.get(cacheKey);
   }
   const run=(async()=>{
-    const retryable=method==='GET'||method==='PUT'||path==='/auth/login';
+    const retryable=method==='GET'||path==='/auth/login';
     const attempts=retryable?4:1;
     let lastError;
     for(let attempt=0;attempt<attempts;attempt++){

@@ -2,6 +2,8 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.database import get_db
 from app.models import Answer, Audit, AuditStatus, Employee, Region, Role, User, Visit, QuestionSetting, ScoreSetting, ActivityLog
 from app.questionnaire import QUESTION_MAP, QUESTIONS
@@ -88,6 +90,33 @@ def list_audits(limit: int = 100, db: Session = Depends(get_db), user: User = De
     return [{"id":a.id,"audit_date":a.audit_date,"status":a.status.value,"current_visit":a.current_visit,"current_step":a.current_step,"total_percent":a.total_percent,"level":a.level,"employee_name":a.employee.full_name,"region_name":a.region.name,"last_saved_at":a.last_saved_at,"auditor_id":a.auditor_id,"auditor_name":a.auditor.full_name,"leader_id":a.leader_id,"leader_name":a.leader.full_name if a.leader else a.auditor.full_name,"is_mine":a.auditor_id == user.id} for a in rows]
 
 
+@router.delete("/{audit_id}")
+def delete_audit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Полное удаление аудита доступно только администратору."""
+    if user.role != Role.admin:
+        raise HTTPException(403, "Удалять аудиты может только администратор")
+
+    audit = load_audit(db, audit_id)
+    employee_name = audit.employee.full_name if audit.employee else "—"
+    audit_date = str(audit.audit_date)
+
+    try:
+        db.add(ActivityLog(
+            user_id=user.id,
+            action="Удалил аудит",
+            entity_type="audit",
+            entity_id=audit.id,
+            details=f"{audit_date} · {employee_name}",
+        ))
+        db.delete(audit)
+        db.commit()
+        clear_cache()
+        return {"deleted": True, "id": audit_id}
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(500, "Не удалось удалить аудит") from exc
+
+
 @router.get("/dashboard")
 def dashboard(region_id: str | None = None, auditor_id: str | None = None, employee_id: str | None = None, month: str | None = None, db: Session = Depends(get_db), user: User = Depends(current_user)):
     cache_key = f"dashboard:{user.id}:{region_id or ''}:{auditor_id or ''}:{employee_id or ''}:{month or ''}"
@@ -136,7 +165,9 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
     ).all()
     qmap = {q.key: q for q in qrows}
     def merged_section(name: str) -> str:
-        display_names = {
+        # Короткие названия используются только в Dashboard/аналитике.
+        # Исходные названия разделов в опроснике остаются без изменений.
+        aliases = {
             "Подготовка к визиту": "Подготовка",
             "Вступление": "Представление",
             "Осмотр": "Осмотр",
@@ -147,7 +178,7 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
             "Завершение визита": "Завершение визита",
             "Анализ визита": "Анализ визита",
         }
-        return display_names.get(name, name)
+        return aliases.get(name, name)
     block_map = {}
     for q in qrows:
         if q.step in (0, 8):
@@ -369,45 +400,84 @@ def progress(audit_id: str, payload: ProgressSave, db: Session = Depends(get_db)
 
 @router.put("/{audit_id}/sync")
 def batch_sync(audit_id: str, payload: BatchSyncIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    audit = load_audit_basic(db, audit_id); ensure_access(user, audit, write=True)
+    audit = load_audit_basic(db, audit_id)
+    ensure_access(user, audit, write=True)
     if audit.status == AuditStatus.completed:
         raise HTTPException(400, "Аудит завершён")
 
-    if payload.answers:
-        keys = [(a.visit_number, a.question_key) for a in payload.answers]
-        existing = db.scalars(select(Answer).where(Answer.audit_id == audit.id)).all()
-        answer_map = {(a.visit_number, a.question_key): a for a in existing}
-        for item in payload.answers:
-            q = QUESTION_MAP.get(item.question_key)
-            if not q:
-                raise HTTPException(400, f"Неизвестный вопрос: {item.question_key}")
-            if item.answer_value not in ["1", "0"]:
-                raise HTTPException(400, "Недопустимый ответ")
-            obj = answer_map.get((item.visit_number, item.question_key))
-            if not obj:
-                obj = Answer(audit_id=audit.id, visit_number=item.visit_number, question_key=item.question_key, answer_value=item.answer_value)
-                db.add(obj)
-                answer_map[(item.visit_number, item.question_key)] = obj
-            obj.answer_value = item.answer_value
-            obj.comment = item.comment
+    try:
+        if payload.answers:
+            rows = []
+            for item in payload.answers:
+                q = QUESTION_MAP.get(item.question_key)
+                if not q:
+                    raise HTTPException(400, f"Неизвестный вопрос: {item.question_key}")
+                if item.answer_value not in ["1", "0"]:
+                    raise HTTPException(400, "Недопустимый ответ")
+                rows.append({
+                    "audit_id": audit.id,
+                    "visit_number": item.visit_number,
+                    "question_key": item.question_key,
+                    "answer_value": item.answer_value,
+                    "comment": item.comment,
+                    "updated_at": datetime.utcnow(),
+                })
 
-    if payload.visit_number is not None and payload.visit is not None:
-        visit = db.scalar(select(Visit).where(Visit.audit_id == audit.id, Visit.visit_number == payload.visit_number))
-        if not visit:
-            raise HTTPException(404, "Визит не найден")
-        for key, value in payload.visit.model_dump(exclude_unset=True).items():
-            setattr(visit, key, value)
-        if payload.visit.latitude is not None:
-            visit.location_received_at = datetime.utcnow()
+            if db.bind and db.bind.dialect.name == "postgresql":
+                stmt = pg_insert(Answer).values(rows)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["audit_id", "visit_number", "question_key"],
+                    set_={
+                        "answer_value": stmt.excluded.answer_value,
+                        "comment": stmt.excluded.comment,
+                        "updated_at": stmt.excluded.updated_at,
+                    },
+                )
+                db.execute(stmt)
+            else:
+                existing = db.scalars(select(Answer).where(Answer.audit_id == audit.id)).all()
+                answer_map = {(a.visit_number, a.question_key): a for a in existing}
+                for row in rows:
+                    key = (row["visit_number"], row["question_key"])
+                    obj = answer_map.get(key)
+                    if not obj:
+                        obj = Answer(
+                            audit_id=audit.id,
+                            visit_number=row["visit_number"],
+                            question_key=row["question_key"],
+                        )
+                        db.add(obj)
+                        answer_map[key] = obj
+                    obj.answer_value = row["answer_value"]
+                    obj.comment = row["comment"]
+                    obj.updated_at = row["updated_at"]
 
-    if payload.current_visit is not None:
-        audit.current_visit = payload.current_visit
-    if payload.current_step is not None:
-        audit.current_step = payload.current_step
-    audit.status = AuditStatus.in_progress
-    audit.last_saved_at = datetime.utcnow()
-    db.commit()
-    return {"saved": True, "at": audit.last_saved_at}
+        if payload.visit_number is not None and payload.visit is not None:
+            visit = db.scalar(select(Visit).where(Visit.audit_id == audit.id, Visit.visit_number == payload.visit_number))
+            if not visit:
+                raise HTTPException(404, "Визит не найден")
+            for key, value in payload.visit.model_dump(exclude_unset=True).items():
+                setattr(visit, key, value)
+            if payload.visit.latitude is not None:
+                visit.location_received_at = datetime.utcnow()
+
+        if payload.current_visit is not None:
+            audit.current_visit = payload.current_visit
+        if payload.current_step is not None:
+            audit.current_step = payload.current_step
+        audit.status = AuditStatus.in_progress
+        audit.last_saved_at = datetime.utcnow()
+        db.commit()
+        return {"saved": True, "at": audit.last_saved_at}
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "Конфликт сохранения. Повторите действие") from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(500, "Ошибка базы данных при сохранении") from exc
 
 
 

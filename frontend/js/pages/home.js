@@ -19,12 +19,27 @@ async function home(){
 
 function auditTable(rows){
   if(!rows.length)return'<p class="muted">Аудитов пока нет</p>';
-  return`<div class="table-wrap"><table class="table"><thead><tr><th>Дата</th><th>Сотрудник</th><th>Регион</th><th>Оценивающий</th><th>Статус</th><th>Результат</th></tr></thead><tbody>${rows.map(a=>`<tr data-open="${a.id}" class="clickable"><td>${esc(a.audit_date)}</td><td>${esc(a.employee_name)}</td><td>${esc(a.region_name)}</td><td>${esc(a.auditor_name||'—')}</td><td><span class="badge ${a.status==='completed'?'ok':'warn'}">${statusName(a.status)}</span></td><td>${a.total_percent==null?'—':a.total_percent+'%'}</td></tr>`).join('')}</tbody></table></div>`;
+  const canDelete=state.me?.role==='admin';
+  return`<div class="table-wrap"><table class="table"><thead><tr><th>Дата</th><th>Сотрудник</th><th>Регион</th><th>Оценивающий</th><th>Статус</th><th>Результат</th>${canDelete?'<th>Действие</th>':''}</tr></thead><tbody>${rows.map(a=>`<tr data-open="${a.id}" class="clickable"><td>${esc(a.audit_date)}</td><td>${esc(a.employee_name)}</td><td>${esc(a.region_name)}</td><td>${esc(a.auditor_name||'—')}</td><td><span class="badge ${a.status==='completed'?'ok':'warn'}">${statusName(a.status)}</span></td><td>${a.total_percent==null?'—':a.total_percent+'%'}</td>${canDelete?`<td><button type="button" class="btn danger small" data-delete-audit="${a.id}">Удалить</button></td>`:''}</tr>`).join('')}</tbody></table></div>`;
+}
+
+async function deleteAudit(id){
+  if(state.me?.role!=='admin')return;
+  if(!confirm('Удалить аудит без возможности восстановления?'))return;
+  try{
+    await api(`/audits/${id}`,{method:'DELETE'});
+    state.audits=state.audits.filter(a=>a.id!==id);
+    localStorage.setItem('sle_audits_cache',JSON.stringify(state.audits));
+    toast('Аудит удалён');
+    const active=document.querySelector('[data-page].active')?.dataset.page;
+    if(active==='history')await history();else await home();
+  }catch(e){toast(e.message)}
 }
 function statusName(s){return({draft:'Черновик',in_progress:'В процессе',completed:'Завершён',cancelled:'Отменён'})[s]||s}
 function bindNav(){
   $$('[data-page]').forEach(b=>b.onclick=()=>({home,history,dashboard,admin:adminPage,search:searchPage,logs:logsPage,settings:settingsPage}[b.dataset.page]?.()));
   $$('[data-open]').forEach(r=>r.onclick=()=>openAudit(r.dataset.open));
+  $$('[data-delete-audit]').forEach(b=>b.onclick=e=>{e.stopPropagation();deleteAudit(b.dataset.deleteAudit)});
 }
 
 async function searchPage(){

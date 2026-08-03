@@ -12,6 +12,9 @@ settings = get_settings()
 app = FastAPI(title="SLE Audit API", version="1.0.1")
 # CORS добавляется внешним middleware, чтобы заголовки присутствовали
 # даже в ответах на необработанные серверные ошибки.
+app.add_middleware(GZipMiddleware, minimum_size=700)
+# CORS добавляется последним: в Starlette последний middleware становится внешним.
+# Благодаря этому CORS-заголовки присутствуют даже при ошибках внутри приложения.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_list,
@@ -20,7 +23,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(GZipMiddleware, minimum_size=700)
 app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(audits.router)
