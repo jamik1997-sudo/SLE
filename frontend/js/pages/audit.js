@@ -38,12 +38,70 @@ function setSaving(t){const s=$('#saveState');if(s)s.textContent=t}
 function updateLocalAnswer(visit,key,value){let found=state.audit.answers.find(a=>a.visit_number===visit&&a.question_key===key);if(found){found.answer_value=value;found.comment=null}else{found={visit_number:visit,question_key:key,answer_value:value,comment:null};state.audit.answers.push(found)}state.pendingAnswers.set(`${visit}:${key}`,found);persistDraft();scheduleSync()}
 function persistDraft(){if(state.audit)localStorage.setItem('sle_draft_'+state.audit.id,JSON.stringify({answers:state.audit.answers,visits:state.audit.visits,current_visit:state.visit,current_step:state.step,ts:Date.now()}))}
 function scheduleSync(delay=700){setSaving('Сохранение…');clearTimeout(state.syncTimer);state.syncTimer=setTimeout(()=>flushSync().catch(e=>{setSaving('Ошибка сохранения');toast(e.message)}),delay)}
-async function flushSync(extra={}){if(state.syncing)return state.syncing;clearTimeout(state.syncTimer);const answers=[...state.pendingAnswers.values()].map(a=>({visit_number:a.visit_number,question_key:a.question_key,answer_value:a.answer_value,comment:null}));const visitPayload=Object.keys(state.pendingVisit).length?{...state.pendingVisit}:null;if(!answers.length&&!visitPayload&&!Object.keys(extra).length){setSaving('Сохранено');return}const payload={answers,current_visit:state.visit,current_step:state.step,...extra};if(visitPayload&&state.visit){payload.visit_number=state.visit;payload.visit=visitPayload}state.syncing=api(`/audits/${state.audit.id}/sync`,{method:'PUT',body:JSON.stringify(payload)}).then(()=>{answers.forEach(a=>state.pendingAnswers.delete(`${a.visit_number}:${a.question_key}`));if(visitPayload)for(const k of Object.keys(visitPayload))delete state.pendingVisit[k];setSaving('Сохранено')}).finally(()=>state.syncing=null);return state.syncing}
+async function flushSync(extra={}){
+  clearTimeout(state.syncTimer);
+
+  // Если уже идёт сохранение, ждём его завершения, затем обязательно
+  // отправляем всё, что накопилось во время предыдущего запроса.
+  if(state.syncing)await state.syncing;
+
+  const answers=[...state.pendingAnswers.values()].map(a=>({
+    visit_number:a.visit_number,
+    question_key:a.question_key,
+    answer_value:a.answer_value,
+    comment:null
+  }));
+  const visitPayload=Object.keys(state.pendingVisit).length?{...state.pendingVisit}:null;
+
+  if(!answers.length&&!visitPayload&&!Object.keys(extra).length){
+    setSaving('Сохранено');
+    return;
+  }
+
+  const payload={answers,current_visit:state.visit,current_step:state.step,...extra};
+  if(visitPayload&&state.visit){payload.visit_number=state.visit;payload.visit=visitPayload}
+
+  const sentAnswers=new Map(answers.map(a=>[`${a.visit_number}:${a.question_key}`,a.answer_value]));
+  state.syncing=api(`/audits/${state.audit.id}/sync`,{
+    method:'PUT',
+    body:JSON.stringify(payload)
+  }).then(()=>{
+    for(const [key,value] of sentAnswers){
+      const current=state.pendingAnswers.get(key);
+      if(current&&current.answer_value===value)state.pendingAnswers.delete(key);
+    }
+    if(visitPayload){
+      for(const [key,value] of Object.entries(visitPayload)){
+        if(state.pendingVisit[key]===value)delete state.pendingVisit[key];
+      }
+    }
+    setSaving('Сохранено');
+  }).finally(()=>state.syncing=null);
+
+  await state.syncing;
+
+  // Досохраняем изменения, которые появились пока шёл запрос.
+  if(state.pendingAnswers.size||Object.keys(state.pendingVisit).length){
+    return flushSync();
+  }
+}
 function bindWizard(){if(state.visit&&state.step===1)api(`/extras/audit/${state.audit.id}/visit/${state.visit}/start`,{method:'POST'}).catch(()=>{});$$('.answer').forEach(b=>b.onclick=()=>{const card=b.closest('.question');updateLocalAnswer(Number(card.dataset.visit),card.dataset.key,b.dataset.value);$$('.answer',card).forEach(x=>x.classList.toggle('selected',x===b))});$('#shopCode')?.addEventListener('input',saveVisitFields);$('#gps')?.addEventListener('click',captureGps);$('#visitComment')?.addEventListener('input',saveVisitFields);$('#prev').onclick=prevStep;$('#next').onclick=nextStep}
 function saveVisitFields(extra={}){if(!state.visit)return;const visit=state.audit.visits.find(v=>v.visit_number===state.visit),payload={};if($('#shopCode'))payload.shop_code=$('#shopCode').value.trim();if($('#visitComment'))payload.comment=$('#visitComment').value;Object.assign(payload,extra);Object.assign(visit,payload);Object.assign(state.pendingVisit,payload);persistDraft();scheduleSync()}
 function captureGps(){if(!navigator.geolocation)return toast('Геолокация не поддерживается на этом устройстве');const btn=$('#gps');if(btn){btn.disabled=true;btn.textContent='Определение местоположения…'}navigator.geolocation.getCurrentPosition(async p=>{try{saveVisitFields({latitude:p.coords.latitude,longitude:p.coords.longitude,gps_accuracy:p.coords.accuracy});await flushSync();toast('GPS-координаты сохранены');renderWizard()}catch(e){toast(e.message)}},e=>{if(btn){btn.disabled=false;btn.textContent='Определить местоположение'};const messages={1:'Доступ к геолокации запрещён',2:'Местоположение недоступно',3:'Превышено время ожидания GPS'};toast(messages[e.code]||('Не удалось определить местоположение: '+e.message))},{enableHighAccuracy:true,timeout:25000,maximumAge:0})}
 function currentComplete(){const map=answersMap(),qs=state.questions.filter(q=>q.step===state.step),visit=[0,8].includes(state.step)?0:state.visit;if(qs.some(q=>!map[`${visit}:${q.key}`]))return false;if(state.step===1){const v=state.audit.visits.find(x=>x.visit_number===state.visit);if(!v.shop_code||v.latitude==null||v.longitude==null)return false}return true}
 async function saveProgress(){await flushSync({current_visit:state.visit,current_step:state.step})}
-async function nextStep(){try{if(!currentComplete())throw new Error('Заполните код ТТ, определите GPS и ответьте на все вопросы');if(state.step===8){await flushSync();const r=await api(`/audits/${state.audit.id}/submit`,{method:'POST'});state.audit={...state.audit,...r,status:'completed'};return renderResult(state.audit)}if(state.step===0){state.visit=1;state.step=1}else if(state.step<7)state.step++;else if(state.visit<5){await api(`/extras/audit/${state.audit.id}/visit/${state.visit}/end`,{method:'POST'}).catch(()=>{});state.visit++;state.step=1}else{await api(`/extras/audit/${state.audit.id}/visit/${state.visit}/end`,{method:'POST'}).catch(()=>{});state.visit=0;state.step=8}await saveProgress();renderWizard()}catch(e){toast(e.message)}}
+async function nextStep(){try{if(!currentComplete())throw new Error('Заполните код ТТ, определите GPS и ответьте на все вопросы');if(state.step===8){
+  await flushSync();
+  try{
+    const r=await api(`/audits/${state.audit.id}/submit`,{method:'POST'});
+    state.audit={...state.audit,...r,status:'completed'};
+    return renderResult(state.audit);
+  }catch(err){
+    // Повторно загружаем аудит, чтобы пользователь сразу увидел,
+    // какой шаг действительно не дошёл до сервера.
+    try{state.audit=await api('/audits/'+state.audit.id)}catch{}
+    throw err;
+  }
+}if(state.step===0){state.visit=1;state.step=1}else if(state.step<7)state.step++;else if(state.visit<5){await api(`/extras/audit/${state.audit.id}/visit/${state.visit}/end`,{method:'POST'}).catch(()=>{});state.visit++;state.step=1}else{await api(`/extras/audit/${state.audit.id}/visit/${state.visit}/end`,{method:'POST'}).catch(()=>{});state.visit=0;state.step=8}await saveProgress();renderWizard()}catch(e){toast(e.message)}}
 async function prevStep(){if(state.step===0)return home();if(state.step===8){state.visit=5;state.step=7}else if(state.step>1)state.step--;else if(state.visit>1){state.visit--;state.step=7}else{state.visit=0;state.step=0}await saveProgress();renderWizard()}
 function renderResult(a){shell(`<div class="card accent result"><div class="saved">✅ Результаты сохранены</div><div class="score">${Math.round(a.total_percent||0)}%</div><h1>${esc(a.level||'')}</h1><p class="muted">${esc(a.employee_name||'')}</p><button class="btn primary" id="toHome">На главную</button></div>`);$('#toHome').onclick=home}

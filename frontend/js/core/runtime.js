@@ -113,7 +113,7 @@ async function api(path,opt={}){
         let message=`Ошибка ${res.status}`;
         if(typeof data.detail==='string')message=data.detail;
         else if(Array.isArray(data.detail))message=data.detail.map(x=>`${(x.loc||[]).slice(1).join('.')||'поле'}: ${x.msg}`).join('; ');
-        else if(data.detail?.message)message=data.detail.message;
+        else if(data.detail?.message){message=data.detail.message;if(Array.isArray(data.detail.missing)&&data.detail.missing.length)message+=`: не заполнено ${data.detail.missing.slice(0,8).join(', ')}`;}
         else if(data.message)message=data.message;
         console.error('API error',path,data);throw new Error(message);
       }catch(e){
