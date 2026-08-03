@@ -18,7 +18,7 @@ def allowed_regions(user: User) -> set[str]:
 
 
 def load_audit(db: Session, audit_id: str) -> Audit:
-    audit = db.scalar(select(Audit).where(Audit.id == audit_id).options(selectinload(Audit.visits), selectinload(Audit.answers), selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor)))
+    audit = db.scalar(select(Audit).where(Audit.id == audit_id).options(selectinload(Audit.visits), selectinload(Audit.answers), selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor), selectinload(Audit.leader)))
     if not audit:
         raise HTTPException(404, "Аудит не найден")
     return audit
@@ -81,11 +81,11 @@ def employees(region_id: str | None = None, db: Session = Depends(get_db), user:
 
 @router.get("")
 def list_audits(limit: int = 100, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    stmt = select(Audit).options(selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor)).order_by(Audit.last_saved_at.desc())
+    stmt = select(Audit).options(selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor), selectinload(Audit.leader)).where(Audit.status != AuditStatus.cancelled).order_by(Audit.last_saved_at.desc())
     if user.role == Role.leader:
         stmt = stmt.where(Audit.region_id.in_(allowed_regions(user)))
     rows = db.scalars(stmt.limit(min(max(limit, 1), 500))).all()
-    return [{"id":a.id,"audit_date":a.audit_date,"status":a.status.value,"current_visit":a.current_visit,"current_step":a.current_step,"total_percent":a.total_percent,"level":a.level,"employee_name":a.employee.full_name,"region_name":a.region.name,"last_saved_at":a.last_saved_at,"auditor_id":a.auditor_id,"auditor_name":a.auditor.full_name,"is_mine":a.auditor_id == user.id} for a in rows]
+    return [{"id":a.id,"audit_date":a.audit_date,"status":a.status.value,"current_visit":a.current_visit,"current_step":a.current_step,"total_percent":a.total_percent,"level":a.level,"employee_name":a.employee.full_name,"region_name":a.region.name,"last_saved_at":a.last_saved_at,"auditor_id":a.auditor_id,"auditor_name":a.auditor.full_name,"leader_id":a.leader_id,"leader_name":a.leader.full_name if a.leader else a.auditor.full_name,"is_mine":a.auditor_id == user.id} for a in rows]
 
 
 @router.get("/dashboard")
@@ -96,7 +96,7 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
         return cached
     stmt = (
         select(Audit)
-        .options(selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor), selectinload(Audit.answers))
+        .options(selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor), selectinload(Audit.leader), selectinload(Audit.answers), selectinload(Audit.visits))
         .where(Audit.status == AuditStatus.completed)
         .order_by(Audit.submitted_at.desc())
     )
@@ -106,7 +106,7 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
         ensure_region_access(user, region_id)
         stmt = stmt.where(Audit.region_id == region_id)
     if auditor_id:
-        stmt = stmt.where(Audit.auditor_id == auditor_id)
+        stmt = stmt.where(Audit.leader_id == auditor_id)
     if employee_id:
         stmt = stmt.where(Audit.employee_id == employee_id)
     if month:
@@ -135,12 +135,19 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
         .order_by(QuestionSetting.sort_order)
     ).all()
     qmap = {q.key: q for q in qrows}
+    def merged_section(name: str) -> str:
+        if name in ("Презентация", "Работа с возражениями"):
+            return "Презентация + Работа с возражениями"
+        if name in ("Работа в точке", "Обучение персонала"):
+            return "Работа в точке + Обучение персонала"
+        return name
     block_map = {}
     for q in qrows:
         if q.step in (0, 8):
             continue
-        block_map.setdefault(q.section, {
-            "section": q.section,
+        section = merged_section(q.section)
+        block_map.setdefault(section, {
+            "section": section,
             "order": q.sort_order,
             "earned": 0.0,
             "possible": 0.0,
@@ -164,8 +171,9 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
             q = qmap.get(answer.question_key)
             if not q or q.step in (0, 8):
                 continue
-            block = block_map.setdefault(q.section, {
-                "section": q.section,
+            section = merged_section(q.section)
+            block = block_map.setdefault(section, {
+                "section": section,
                 "order": q.sort_order,
                 "earned": 0.0,
                 "possible": 0.0,
@@ -198,18 +206,26 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
         {"month": name, "average": round(v["sum"] / v["count"], 1), "count": v["count"]}
         for name, v in month_map.items()
     ], key=lambda x: x["month"])[-12:]
-    recent = [
-        {
-            "id": a.id, "audit_date": a.audit_date, "employee_name": a.employee.full_name,
-            "region_name": a.region.name, "auditor_name": a.auditor.full_name,
-            "total_percent": a.total_percent, "level": a.level,
-        } for a in rows[:10]
-    ]
+    recent = []
+    for a in rows[:10]:
+        section_scores = {}
+        for ans in a.answers:
+            q=qmap.get(ans.question_key)
+            if not q or q.step in (0,8): continue
+            name=merged_section(q.section); bucket=section_scores.setdefault(name,{"earned":0.0,"possible":0.0})
+            bucket["possible"] += float(q.weight or 0)
+            if ans.answer_value=="1": bucket["earned"] += float(q.weight or 0)
+        growth="—"
+        if section_scores:
+            growth=min(section_scores.items(), key=lambda x: (x[1]["earned"]/x[1]["possible"] if x[1]["possible"] else 1))[0]
+        codes=", ".join(v.shop_code or "—" for v in a.visits)
+        locations=[{"visit":v.visit_number,"code":v.shop_code or "—","latitude":v.latitude,"longitude":v.longitude,"url":f"https://maps.google.com/?q={v.latitude},{v.longitude}" if v.latitude is not None and v.longitude is not None else None} for v in a.visits]
+        recent.append({"id":a.id,"audit_date":a.audit_date,"shop_codes":codes,"total_percent":a.total_percent,"growth_zone":growth,"locations":locations})
     region_stmt = select(Region).where(Region.is_active == True).order_by(Region.name)
     if user.role == Role.leader:
         region_stmt = region_stmt.where(Region.id.in_(allowed_regions(user)))
     option_regions = db.scalars(region_stmt).all()
-    auditor_stmt = select(User).where(User.is_active == True, User.role.in_([Role.leader, Role.manager])).order_by(User.full_name)
+    auditor_stmt = select(User).where(User.is_active == True, User.role == Role.leader).order_by(User.full_name)
     if user.role == Role.leader:
         auditor_stmt = auditor_stmt.where(User.id == user.id)
     option_auditors = db.scalars(auditor_stmt).all()
@@ -239,21 +255,24 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
 
 @router.post("")
 def create_audit(payload: AuditCreate, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    employee = db.get(Employee, payload.employee_id)
-    if not employee:
-        raise HTTPException(404, "Сотрудник не найден")
-    region_id = payload.region_id or employee.region_id
-    if employee.region_id != region_id:
-        raise HTTPException(400, "Сотрудник относится к другому региону")
-    ensure_region_access(user, region_id)
-    audit = Audit(audit_date=payload.audit_date, employee_id=employee.id, region_id=region_id, auditor_id=user.id)
-    db.add(audit); db.flush()
-    for n in range(1, 6):
-        db.add(Visit(audit_id=audit.id, visit_number=n))
-    db.add(ActivityLog(user_id=user.id,action="Создал аудит",entity_type="audit",entity_id=audit.id,details=employee.full_name))
-    db.commit()
-    clear_cache("dashboard:")
-    return {"id": audit.id}
+    employee=db.get(Employee,payload.employee_id)
+    if not employee or not employee.is_active: raise HTTPException(404,"Сотрудник не найден")
+    region_id=payload.region_id or employee.region_id
+    if employee.region_id!=region_id: raise HTTPException(400,"Сотрудник относится к другому региону")
+    ensure_region_access(user,region_id)
+    if user.role==Role.leader:
+        leader_id=user.id
+        if employee.leader_id and employee.leader_id!=user.id: raise HTTPException(403,"Сотрудник закреплён за другим руководителем")
+    else:
+        leader_id=payload.leader_id or employee.leader_id
+        if user.role==Role.manager and not leader_id: raise HTTPException(422,"Выберите руководителя")
+    leader=db.get(User,leader_id) if leader_id else None
+    if leader and (leader.role!=Role.leader or not leader.is_active): raise HTTPException(422,"Недействительный руководитель")
+    if employee.leader_id and leader_id!=employee.leader_id: raise HTTPException(422,"Выбранный сотрудник закреплён за другим руководителем")
+    audit=Audit(audit_date=payload.audit_date,employee_id=employee.id,region_id=region_id,auditor_id=user.id,leader_id=leader_id)
+    db.add(audit);db.flush()
+    for n in range(1,6): db.add(Visit(audit_id=audit.id,visit_number=n))
+    db.add(ActivityLog(user_id=user.id,action="Создал аудит",entity_type="audit",entity_id=audit.id,details=employee.full_name));db.commit();clear_cache("dashboard:");return {"id":audit.id}
 
 
 @router.get("/{audit_id}")
@@ -261,10 +280,10 @@ def get_audit(audit_id: str, db: Session = Depends(get_db), user: User = Depends
     audit = load_audit(db, audit_id); ensure_access(user, audit)
     return {
         "id":audit.id,"audit_date":audit.audit_date,"region_id":audit.region_id,"region_name":audit.region.name,
-        "employee_id":audit.employee_id,"employee_name":audit.employee.full_name,"status":audit.status.value,
+        "employee_id":audit.employee_id,"employee_name":audit.employee.full_name,"leader_id":audit.leader_id,"leader_name":audit.leader.full_name if audit.leader else None,"status":audit.status.value,
         "current_visit":audit.current_visit,"current_step":audit.current_step,"total_score":audit.total_score,
         "total_percent":audit.total_percent,"level":audit.level,
-        "visits":[{"visit_number":v.visit_number,"shop_code":v.shop_code,"shop_name":v.shop_name,"latitude":v.latitude,"longitude":v.longitude,"gps_accuracy":v.gps_accuracy,"comment":v.comment} for v in audit.visits],
+        "visits":[{"visit_number":v.visit_number,"shop_code":v.shop_code,"latitude":v.latitude,"longitude":v.longitude,"gps_accuracy":v.gps_accuracy,"comment":v.comment} for v in audit.visits],
         "answers":[{"visit_number":a.visit_number,"question_key":a.question_key,"answer_value":a.answer_value,"comment":a.comment} for a in audit.answers],
     }
 
@@ -344,21 +363,6 @@ def batch_sync(audit_id: str, payload: BatchSyncIn, db: Session = Depends(get_db
     db.commit()
     return {"saved": True, "at": audit.last_saved_at}
 
-
-@router.post("/{audit_id}/cancel")
-def cancel_audit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    audit = load_audit_basic(db, audit_id)
-    ensure_access(user, audit, write=True)
-    if audit.status == AuditStatus.completed:
-        raise HTTPException(400, "Завершённый аудит отменить нельзя")
-    if audit.status == AuditStatus.cancelled:
-        return {"cancelled": True}
-    audit.status = AuditStatus.cancelled
-    audit.last_saved_at = datetime.utcnow()
-    db.add(ActivityLog(user_id=user.id, action="Отменил незавершённый аудит", entity_type="audit", entity_id=audit.id))
-    db.commit()
-    clear_cache("dashboard:")
-    return {"cancelled": True}
 
 
 @router.post("/{audit_id}/submit")

@@ -12,11 +12,11 @@
       "headers": [{ "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate, max-age=0" }]
     },
     {
-      "source": "/app.v28.js",
+      "source": "/app.v29.js",
       "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
     },
     {
-      "source": "/styles.v28.css",
+      "source": "/styles.v29.css",
       "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
     },
     {

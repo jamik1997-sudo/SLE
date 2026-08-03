@@ -5,6 +5,8 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.routers import admin, audits, auth, extras
+from app.database import engine
+from sqlalchemy import text
 
 settings = get_settings()
 app = FastAPI(title="SLE Audit API", version="1.0.1")
@@ -39,6 +41,13 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.on_event("startup")
 def startup():
+    # Lightweight compatibility migration for existing Supabase databases.
+    with engine.begin() as conn:
+        if engine.dialect.name == "postgresql":
+            conn.execute(text("ALTER TABLE employees ADD COLUMN IF NOT EXISTS leader_id VARCHAR(36)"))
+            conn.execute(text("ALTER TABLE audits ADD COLUMN IF NOT EXISTS leader_id VARCHAR(36)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_employees_leader_id ON employees(leader_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_audits_leader_id ON audits(leader_id)"))
     # Database schema creation and seeding are disabled during normal starts.
     # This removes dozens of Supabase round-trips from every Render Free cold start.
     # On a fresh installation set INIT_DB_ON_START=true once, or run:

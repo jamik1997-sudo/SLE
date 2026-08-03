@@ -16,6 +16,7 @@ router = APIRouter(prefix="/extras", tags=["extras"])
 def allowed_regions(user): return {x.region_id for x in user.regions}
 
 def scope(stmt, user):
+    stmt = stmt.where(Audit.status != AuditStatus.cancelled)
     if user.role == Role.leader:
         stmt = stmt.where(Audit.region_id.in_(allowed_regions(user)))
     return stmt
@@ -121,7 +122,7 @@ def questionnaire_report(
         "key": q.key, "section": q.section, "step": q.step, "weight": q.weight, "text": q.text_ru
     } for q in qrows]
     stats = {q["key"]: {**q, "filled": 0, "ones": 0, "zeros": 0} for q in questions}
-    status_counts = {"draft": 0, "in_progress": 0, "completed": 0, "cancelled": 0}
+    status_counts = {"draft": 0, "in_progress": 0, "completed": 0, }
     details = []
     total_answers = 0
     for audit in audits:
@@ -201,7 +202,7 @@ def _style_sheet(ws):
             cell.alignment = Alignment(vertical="top", wrap_text=True)
 
 
-@router.get("/export/audits.xlsx")
+@router.get("/export/audit-report.xlsx")
 def export_audits_xlsx(
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
@@ -216,9 +217,9 @@ def export_audits_xlsx(
     ws = wb.active
     ws.title = "Аудиты"
     ws.append(["Дата", "Сотрудник", "Регион", "Оценивающий", "Статус", "Результат, %", "Уровень", "Торговые точки", "Координаты ТТ", "Начат", "Отправлен"])
-    status_names = {"draft":"Черновик", "in_progress":"В процессе", "completed":"Завершён", "cancelled":"Отменён"}
+    status_names = {"draft":"Черновик", "in_progress":"В процессе", "completed":"Завершён"}
     for a in audits:
-        shop_names = "; ".join(f"{v.visit_number}. {v.shop_name or v.shop_code or '—'}" for v in a.visits)
+        shop_names = "; ".join(f"{v.visit_number}. {v.shop_code or '—'}" for v in a.visits)
         coordinates = "; ".join(f"{v.visit_number}. {v.latitude},{v.longitude}" for v in a.visits if v.latitude is not None and v.longitude is not None)
         ws.append([
             a.audit_date,
@@ -239,18 +240,18 @@ def export_audits_xlsx(
             for c in cell: c.number_format = "dd.mm.yyyy hh:mm"
     _style_sheet(ws)
     loc = wb.create_sheet("Торговые точки")
-    loc.append(["ID аудита", "Дата", "Регион", "Сотрудник", "Оценивающий", "Визит", "Код ТТ", "Название ТТ", "Широта", "Долгота", "Координаты", "Ссылка на карту"])
+    loc.append(["ID аудита", "Дата", "Регион", "Сотрудник", "Оценивающий", "Визит", "Код ТТ", "Широта", "Долгота", "Координаты", "Ссылка на карту"])
     for a in audits:
         for v in a.visits:
             coords = f"{v.latitude},{v.longitude}" if v.latitude is not None and v.longitude is not None else ""
-            loc.append([a.id, a.audit_date, a.region.name if a.region else "", a.employee.full_name if a.employee else "", a.auditor.full_name if a.auditor else "", v.visit_number, v.shop_code, v.shop_name, v.latitude, v.longitude, coords, f"https://maps.google.com/?q={coords}" if coords else ""])
+            loc.append([a.id, a.audit_date, a.region.name if a.region else "", a.employee.full_name if a.employee else "", a.auditor.full_name if a.auditor else "", v.visit_number, v.shop_code, v.latitude, v.longitude, coords, f"https://maps.google.com/?q={coords}" if coords else ""])
             if coords:
-                cell = loc.cell(loc.max_row, 12); cell.hyperlink = cell.value; cell.style = "Hyperlink"
+                cell = loc.cell(loc.max_row, 11); cell.hyperlink = cell.value; cell.style = "Hyperlink"
     _style_sheet(loc)
-    return _xlsx_response(wb, "sle-audits.xlsx")
+    return _xlsx_response(wb, "audit-report.xlsx")
 
 
-@router.get("/export/questionnaire.xlsx")
+@router.get("/export/detailed-report.xlsx")
 def export_questionnaire_xlsx(
     limit: int = 3000,
     db: Session = Depends(get_db),
@@ -271,9 +272,9 @@ def export_questionnaire_xlsx(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Заполнения"
-    ws.append(["ID аудита", "Дата", "Статус", "Регион", "Сотрудник", "Оценивающий", "Визит", "Код ТТ", "Название ТТ", "Широта", "Долгота", "Раздел", "Вопрос", "Ответ", "Обновлено"])
-    status_names = {"draft":"Черновик", "in_progress":"В процессе", "completed":"Завершён", "cancelled":"Отменён"}
+    ws.title = "Детальный отчет"
+    ws.append(["ID аудита", "Дата", "Статус", "Регион", "Сотрудник", "Оценивающий", "Визит", "Код ТТ", "Широта", "Долгота", "Раздел", "Вопрос", "Ответ", "Обновлено"])
+    status_names = {"draft":"Черновик", "in_progress":"В процессе", "completed":"Завершён"}
     for audit in audits:
         for answer in audit.answers:
             q = qmap.get(answer.question_key)
@@ -287,11 +288,11 @@ def export_questionnaire_xlsx(
                 audit.id, audit.audit_date, status_names.get(audit.status.value, audit.status.value),
                 audit.region.name if audit.region else "", audit.employee.full_name if audit.employee else "",
                 audit.auditor.full_name if audit.auditor else "", answer.visit_number,
-                visit.shop_code if visit else "", visit.shop_name if visit else "", visit.latitude if visit else None, visit.longitude if visit else None,
+                visit.shop_code if visit else "", visit.latitude if visit else None, visit.longitude if visit else None,
                 q.section, q.text_ru, answer.answer_value, answer.updated_at,
             ])
     for cell in ws["B"][1:]: cell.number_format = "dd.mm.yyyy"
-    for cell in ws["O"][1:]: cell.number_format = "dd.mm.yyyy hh:mm"
+    for cell in ws["N"][1:]: cell.number_format = "dd.mm.yyyy hh:mm"
     _style_sheet(ws)
 
     sm = wb.create_sheet("Сводка")
@@ -308,4 +309,4 @@ def export_questionnaire_xlsx(
         for cell in sm.iter_cols(min_col=col, max_col=col, min_row=2):
             for c in cell: c.number_format = '0.0"%"'
     _style_sheet(sm)
-    return _xlsx_response(wb, "sle-questionnaire-report.xlsx")
+    return _xlsx_response(wb, "detailed-audit-report.xlsx")

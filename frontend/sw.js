@@ -1,10 +1,10 @@
-const CACHE_VERSION = "sle-audit-v28-speed";
+const CACHE_VERSION = "sle-audit-v29";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const APP_SHELL = [
   '/',
   '/index.html',
-  '/styles.v28.css',
-  '/app.v28.js',
+  '/styles.v29.css',
+  '/app.v29.js',
   '/config.js',
   '/manifest.webmanifest',
   '/assets/icons/icon.svg'
@@ -45,7 +45,7 @@ self.addEventListener('fetch', event => {
 
   const isFreshAppFile =
     request.mode === 'navigate' ||
-    ['/index.html', '/app.v28.js', '/styles.v28.css', '/config.js', '/manifest.webmanifest', '/sw.js'].includes(url.pathname);
+    ['/index.html', '/app.v29.js', '/styles.v29.css', '/config.js', '/manifest.webmanifest', '/sw.js'].includes(url.pathname);
 
   // Network first for files that change with every release.
   if (isFreshAppFile) {
