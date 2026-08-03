@@ -10,6 +10,7 @@ from openpyxl.utils import get_column_letter
 from app.database import get_db
 from app.models import (ActivityLog, Answer, Audit, AuditStatus, Employee, QuestionSetting, Region, Role, ScoreSetting, User, Visit, VisitTiming)
 from app.security import current_user, require_roles
+from app.timezone_utils import to_tashkent_naive
 
 router = APIRouter(prefix="/extras", tags=["extras"])
 
@@ -231,8 +232,8 @@ def export_audits_xlsx(
             a.level or "",
             shop_names,
             coordinates,
-            a.started_at,
-            a.submitted_at,
+            to_tashkent_naive(a.started_at),
+            to_tashkent_naive(a.submitted_at),
         ])
     for cell in ws["A"][1:]: cell.number_format = "dd.mm.yyyy"
     for col in (10, 11):
@@ -289,7 +290,7 @@ def export_questionnaire_xlsx(
                 audit.region.name if audit.region else "", audit.employee.full_name if audit.employee else "",
                 audit.auditor.full_name if audit.auditor else "", answer.visit_number,
                 visit.shop_code if visit else "", visit.latitude if visit else None, visit.longitude if visit else None,
-                q.section, q.text_ru, answer.answer_value, answer.updated_at,
+                q.section, q.text_ru, answer.answer_value, to_tashkent_naive(answer.updated_at),
             ])
     for cell in ws["B"][1:]: cell.number_format = "dd.mm.yyyy"
     for cell in ws["N"][1:]: cell.number_format = "dd.mm.yyyy hh:mm"

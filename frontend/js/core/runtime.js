@@ -1,6 +1,29 @@
 // SLE frontend build v2.9
 const API=(window.SLE_CONFIG?.API_URL||'').replace(/\/$/,'');
 const app=document.getElementById('app');
+
+const SLE_TIME_ZONE='Asia/Tashkent';
+function parseServerDateTime(value){
+  if(!value)return null;
+  const text=String(value);
+  // Backend stores timestamps in UTC without an explicit suffix.
+  return new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(text)?text:`${text}Z`);
+}
+function formatTashkentDateTime(value){
+  const d=parseServerDateTime(value);
+  if(!d||Number.isNaN(d.getTime()))return '—';
+  return new Intl.DateTimeFormat('ru-RU',{
+    timeZone:SLE_TIME_ZONE,day:'2-digit',month:'2-digit',year:'numeric',
+    hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false
+  }).format(d);
+}
+function tashkentToday(){
+  const parts=new Intl.DateTimeFormat('en-CA',{
+    timeZone:SLE_TIME_ZONE,year:'numeric',month:'2-digit',day:'2-digit'
+  }).formatToParts(new Date());
+  const get=t=>parts.find(x=>x.type===t)?.value||'';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
 function getDeviceId(){
   let id=localStorage.getItem('sle_device_id');
   if(!id){

@@ -54,7 +54,7 @@ async function logsPage(){
   if(!['admin','manager'].includes(state.me.role))return home();
   try{
     const rows=await api('/extras/logs?limit=200',{force:true});
-    shell(`${mainNav('logs')}<div class="card"><h1>Журнал действий</h1><div class="table-wrap"><table class="table"><tr><th>Дата</th><th>Пользователь</th><th>Действие</th><th>Детали</th></tr>${rows.map(x=>`<tr><td>${esc(new Date(x.created_at).toLocaleString('ru-RU'))}</td><td>${esc(x.user)}</td><td>${esc(x.action)}</td><td>${esc(x.details||'—')}</td></tr>`).join('')}</table></div></div>`);
+    shell(`${mainNav('logs')}<div class="card"><h1>Журнал действий</h1><div class="table-wrap"><table class="table"><tr><th>Дата</th><th>Пользователь</th><th>Действие</th><th>Детали</th></tr>${rows.map(x=>`<tr><td>${esc(formatTashkentDateTime(x.created_at))}</td><td>${esc(x.user)}</td><td>${esc(x.action)}</td><td>${esc(x.details||'—')}</td></tr>`).join('')}</table></div></div>`);
     bindNav();
   }catch(e){toast(e.message)}
 }
