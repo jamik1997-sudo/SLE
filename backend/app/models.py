@@ -41,6 +41,9 @@ class User(Base):
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    device_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    device_name: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    device_bound_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     regions: Mapped[list["UserRegion"]] = relationship(cascade="all, delete-orphan")
 
 

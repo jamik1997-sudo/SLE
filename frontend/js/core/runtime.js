@@ -1,6 +1,29 @@
 // SLE frontend build v2.9
 const API=(window.SLE_CONFIG?.API_URL||'').replace(/\/$/,'');
 const app=document.getElementById('app');
+function getDeviceId(){
+  let id=localStorage.getItem('sle_device_id');
+  if(!id){
+    id=(crypto.randomUUID?crypto.randomUUID():`sle-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    localStorage.setItem('sle_device_id',id);
+  }
+  return id;
+}
+function getDeviceName(){
+  const ua=navigator.userAgent||'';
+  let browser='Браузер';
+  if(/Edg\//.test(ua))browser='Microsoft Edge';
+  else if(/Chrome\//.test(ua))browser='Google Chrome';
+  else if(/Firefox\//.test(ua))browser='Mozilla Firefox';
+  else if(/Safari\//.test(ua))browser='Safari';
+  let os='Устройство';
+  if(/Android/.test(ua))os='Android';
+  else if(/iPhone|iPad/.test(ua))os='iPhone/iPad';
+  else if(/Windows/.test(ua))os='Windows';
+  else if(/Mac OS/.test(ua))os='macOS';
+  else if(/Linux/.test(ua))os='Linux';
+  return `${os} · ${browser}`.slice(0,240);
+}
 const state={
   token:localStorage.getItem('sle_token')||'',
   theme:localStorage.getItem('sle_theme')||'light',

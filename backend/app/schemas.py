@@ -6,6 +6,8 @@ from app.models import Role
 class LoginIn(BaseModel):
     login: str
     password: str
+    device_id: str | None = Field(default=None, min_length=8, max_length=120)
+    device_name: str | None = Field(default=None, max_length=240)
 
 
 class TokenOut(BaseModel):

@@ -46,8 +46,12 @@ def startup():
         if engine.dialect.name == "postgresql":
             conn.execute(text("ALTER TABLE employees ADD COLUMN IF NOT EXISTS leader_id VARCHAR(36)"))
             conn.execute(text("ALTER TABLE audits ADD COLUMN IF NOT EXISTS leader_id VARCHAR(36)"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS device_id VARCHAR(120)"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS device_name VARCHAR(240)"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS device_bound_at TIMESTAMP"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_employees_leader_id ON employees(leader_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_audits_leader_id ON audits(leader_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_device_id ON users(device_id)"))
     # Database schema creation and seeding are disabled during normal starts.
     # This removes dozens of Supabase round-trips from every Render Free cold start.
     # On a fresh installation set INIT_DB_ON_START=true once, or run:

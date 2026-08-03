@@ -19,7 +19,7 @@ def _ensure_can_manage(actor: User, target: User):
 @router.get("/users")
 def users(db: Session = Depends(get_db), _: User = Depends(require_roles(Role.admin, Role.manager))):
     rows = db.scalars(select(User).options(selectinload(User.regions).selectinload(UserRegion.region)).where(User.is_active == True).order_by(User.full_name)).all()
-    return [{"id":u.id,"full_name":u.full_name,"login":u.login,"role":u.role.value,"is_active":u.is_active,"regions":[{"id":x.region.id,"name":x.region.name} for x in u.regions]} for u in rows]
+    return [{"id":u.id,"full_name":u.full_name,"login":u.login,"role":u.role.value,"is_active":u.is_active,"regions":[{"id":x.region.id,"name":x.region.name} for x in u.regions],"device_bound":bool(u.device_id) if u.role==Role.leader else False,"device_name":u.device_name if u.role==Role.leader else None,"device_bound_at":u.device_bound_at.isoformat() if u.device_bound_at else None} for u in rows]
 
 
 @router.post("/users")
@@ -54,11 +54,30 @@ def update_user(user_id: str, payload: dict, db: Session = Depends(get_db), acto
     if role==Role.leader:
         if not region_id or not db.get(Region,region_id): raise HTTPException(422,"Для руководителя выберите регион")
     target.full_name=full_name;target.login=login;target.role=role
+    if role != Role.leader:
+        target.device_id=None;target.device_name=None;target.device_bound_at=None
     if payload.get("password"): target.password_hash=hash_password(str(payload["password"]));target.must_change_password=True
     for ur in list(target.regions): db.delete(ur)
     if role==Role.leader: db.add(UserRegion(user_id=target.id,region_id=region_id))
     db.add(ActivityLog(user_id=actor.id,action="Изменил пользователя",entity_type="user",entity_id=target.id,details=target.full_name));db.commit()
     return {"saved":True}
+
+
+@router.post("/users/{user_id}/reset-device")
+def reset_user_device(user_id: str, db: Session = Depends(get_db), actor: User = Depends(require_roles(Role.admin, Role.manager))):
+    target = db.get(User, user_id)
+    if not target:
+        raise HTTPException(404, "Пользователь не найден")
+    if actor.role == Role.manager and target.role == Role.admin:
+        raise HTTPException(403, "Менеджер не может изменять администратора")
+    if target.role != Role.leader:
+        raise HTTPException(422, "Привязка устройства используется только для руководителей")
+    target.device_id = None
+    target.device_name = None
+    target.device_bound_at = None
+    db.add(ActivityLog(user_id=actor.id, action="Сбросил привязку устройства", entity_type="user", entity_id=target.id, details=target.full_name))
+    db.commit()
+    return {"reset": True}
 
 
 @router.delete("/users/{user_id}")
