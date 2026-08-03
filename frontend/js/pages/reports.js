@@ -3,6 +3,21 @@ async function history(){
   shell(`${mainNav('history')}<div class="card"><div class="section-head"><div><h1>Отчёты</h1><p class="muted">Все доступные аудиты</p></div><input id="reportSearch" class="search" placeholder="Поиск по сотруднику или региону"></div><div class="actions"><button class="btn primary" id="exportExcel">Отчет по аудиту</button><button class="btn secondary" id="exportAnswers">Детальный отчет</button></div><div id="reportTable" class="top-gap">${auditTable(state.audits)}</div></div>`);
   bindNav();$('#exportExcel').onclick=()=>downloadExcel('/extras/export/audit-report.xlsx','audit-report.xlsx');$('#exportAnswers').onclick=()=>downloadExcel('/extras/export/detailed-report.xlsx','detailed-audit-report.xlsx');$('#reportSearch').oninput=e=>{const q=e.target.value.trim().toLowerCase();const rows=state.audits.filter(a=>[a.employee_name,a.region_name,a.auditor_name,a.level].some(v=>String(v||'').toLowerCase().includes(q)));$('#reportTable').innerHTML=auditTable(rows);$$('[data-open]').forEach(r=>r.onclick=()=>openAudit(r.dataset.open))};
 }
+function dashboardBlockName(name){
+  return ({
+    'Подготовка к визиту':'Подготовка',
+    'Вступление':'Представление',
+    'Осмотр':'Осмотр',
+    'Презентация':'Предложение',
+    'Работа с возражениями':'Предложение',
+    'Презентация + Работа с возражениями':'Предложение',
+    'Работа в точке':'Работа в точке',
+    'Обучение персонала':'Работа в точке',
+    'Работа в точке + Обучение персонала':'Работа в точке',
+    'Завершение визита':'Завершение визита',
+    'Анализ визита':'Анализ визита'
+  })[name]||name;
+}
 function statBar(label,value,count){return`<div class="stat-row"><div class="stat-label"><span>${esc(label)}</span><strong>${value}%</strong></div><div class="bar"><i style="width:${Math.max(0,Math.min(100,value))}%"></i></div><small>${count} ауд.</small></div>`}
 async function dashboard(filters={}){
   const qs=new URLSearchParams(Object.entries(filters).filter(([,v])=>v));

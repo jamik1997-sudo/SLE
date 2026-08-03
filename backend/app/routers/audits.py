@@ -1,11 +1,11 @@
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.database import get_db
-from app.models import Answer, Audit, AuditStatus, Employee, Region, Role, User, Visit, QuestionSetting, ScoreSetting, ActivityLog
+from app.models import Answer, Audit, AuditStatus, Employee, Region, Role, User, Visit, VisitTiming, QuestionSetting, ScoreSetting, ActivityLog
 from app.questionnaire import QUESTION_MAP, QUESTIONS
 from app.schemas import AnswerSave, AuditCreate, ProgressSave, VisitSave, BatchSyncIn
 from app.security import current_user
@@ -96,19 +96,26 @@ def delete_audit(audit_id: str, db: Session = Depends(get_db), user: User = Depe
     if user.role != Role.admin:
         raise HTTPException(403, "Удалять аудиты может только администратор")
 
-    audit = load_audit(db, audit_id)
-    employee_name = audit.employee.full_name if audit.employee else "—"
+    audit = load_audit_basic(db, audit_id)
+    employee = db.get(Employee, audit.employee_id)
+    employee_name = employee.full_name if employee else "—"
     audit_date = str(audit.audit_date)
 
     try:
+        # Явное удаление дочерних записей работает и для старых баз,
+        # где внешние ключи могли быть созданы без ON DELETE CASCADE.
+        db.execute(delete(Answer).where(Answer.audit_id == audit_id))
+        db.execute(delete(VisitTiming).where(VisitTiming.audit_id == audit_id))
+        db.execute(delete(Visit).where(Visit.audit_id == audit_id))
+        db.execute(delete(Audit).where(Audit.id == audit_id))
+
         db.add(ActivityLog(
             user_id=user.id,
             action="Удалил аудит",
             entity_type="audit",
-            entity_id=audit.id,
+            entity_id=audit_id,
             details=f"{audit_date} · {employee_name}",
         ))
-        db.delete(audit)
         db.commit()
         clear_cache()
         return {"deleted": True, "id": audit_id}
