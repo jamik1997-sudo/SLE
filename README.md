@@ -1,40 +1,29 @@
-# SLE Audit v2.9
+# SLE Audit v3.0
 
-Статический frontend без npm для Vercel, FastAPI backend для Render и PostgreSQL Supabase.
+Чистая модульная архитектура без npm и Node.js.
 
-## Изменения v2.9
+## Структура
 
-- удалена функция отмены аудита; ранее отменённые аудиты скрыты из списков и отчётов;
-- в визите оставлен только код ТТ и GPS;
-- Dashboard показывает Базовый, Уверенный и Мастер;
-- объединены блоки «Презентация + Работа с возражениями» и «Работа в точке + Обучение персонала»;
-- последние завершённые аудиты: дата, коды ТТ, результат, зона роста и ссылки на локации;
-- отчёты: «Отчет по аудиту» и «Детальный отчет» в Excel;
-- исключено создание дубликатов сотрудников;
-- сотрудник обязательно закрепляется за руководителем;
-- менеджер при создании аудита выбирает руководителя;
-- администратор и менеджер могут редактировать и удалять пользователей и сотрудников;
-- переключатель RU/UZ удалён.
+- `frontend/js/core/runtime.js` — состояние, API, кэш, тема, PWA и общие утилиты.
+- `frontend/js/pages/auth.js` — авторизация и запуск приложения.
+- `frontend/js/pages/home.js` — главная, навигация, поиск, карточки сотрудников, журнал и настройки.
+- `frontend/js/pages/reports.js` — история, Dashboard, фильтры и отчёты.
+- `frontend/js/pages/audit.js` — мастер опроса, GPS, QR, автосохранение и завершение.
+- `frontend/js/pages/admin.js` — регионы, сотрудники, руководители, пользователи, пароль и Excel.
+- `backend/app/routers/` — отдельные API-модули авторизации, аудитов, администрирования и отчётов.
 
-## Развертывание
+## Vercel
 
-### Render
-Root Directory: `backend`
+- Root Directory: `frontend`
+- Framework: `Other`
+- Build Command: пусто
+- Install Command: пусто
+- Output Directory: `.`
 
-Build Command:
-```bash
-pip install --disable-pip-version-check --prefer-binary -r requirements.txt
-```
+## Render
 
-Start Command:
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port $PORT --no-access-log
-```
+- Root Directory: `backend`
+- Build: `pip install --disable-pip-version-check --prefer-binary -r requirements.txt`
+- Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT --no-access-log`
 
-При первом запуске после обновления backend автоматически добавит колонки `leader_id` в таблицы `employees` и `audits`.
-
-### Vercel
-Root Directory: `frontend`
-Framework Preset: `Other`
-Build/Install Command: пусто
-Output Directory: `.`
+Переменные окружения сохраняются прежними. Для существующей базы `INIT_DB_ON_START=false`.
