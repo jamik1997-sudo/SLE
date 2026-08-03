@@ -1,7 +1,28 @@
-async function getEmployees(regionId){
-  if(state.employees.has(regionId))return state.employees.get(regionId);
-  const cached=JSON.parse(localStorage.getItem('sle_employees_'+regionId)||'null');if(cached){state.employees.set(regionId,cached);return cached}
-  const list=await api('/audits/employees?region_id='+encodeURIComponent(regionId));state.employees.set(regionId,list);localStorage.setItem('sle_employees_'+regionId,JSON.stringify(list));return list;
+async function getEmployees(regionId,{force=false}={}){
+  const cacheKey='sle_employees_'+regionId;
+  if(!force&&state.employees.has(regionId))return state.employees.get(regionId);
+  if(!force){
+    try{
+      const cached=JSON.parse(localStorage.getItem(cacheKey)||'null');
+      if(Array.isArray(cached)){
+        state.employees.set(regionId,cached);
+        // Фоновое обновление: старый список показывается сразу, но ID актуализируются с сервера.
+        api('/audits/employees?region_id='+encodeURIComponent(regionId),{force:true}).then(list=>{
+          state.employees.set(regionId,list);
+          localStorage.setItem(cacheKey,JSON.stringify(list));
+        }).catch(()=>{});
+        return cached;
+      }
+    }catch{}
+  }
+  const list=await api('/audits/employees?region_id='+encodeURIComponent(regionId),{force:true});
+  state.employees.set(regionId,list);
+  localStorage.setItem(cacheKey,JSON.stringify(list));
+  return list;
+}
+function clearEmployeeCache(regionId){
+  state.employees.delete(regionId);
+  localStorage.removeItem('sle_employees_'+regionId);
 }
 async function newAuditForm(){
   let regions=state.regions||[];try{if(!regions.length){regions=await api('/audits/regions');state.regions=regions;localStorage.setItem('sle_regions',JSON.stringify(regions))}}catch(e){return toast(e.message)}
@@ -15,7 +36,32 @@ async function newAuditForm(){
   async function refreshEmployees(){const region=$('#region')?.value||regions[0]?.id||'';const list=region?await getEmployees(region):[];const leader=$('#auditLeader')?.value||'';const filtered=leader?list.filter(x=>x.leader_id===leader):list;$('#employee').innerHTML='<option value="">Выберите сотрудника</option>'+filtered.map(x=>`<option value="${x.id}" data-leader="${x.leader_id||''}">${esc(x.full_name)}</option>`).join('')}
   $('#region')?.addEventListener('change',async e=>{if($('#auditLeader')){$$('#auditLeader option').forEach(o=>{if(o.value)o.hidden=!!e.target.value&&o.dataset.region!==e.target.value});$('#auditLeader').value=''}await refreshEmployees()});
   $('#auditLeader')?.addEventListener('change',refreshEmployees);
-  $('#createAudit').onsubmit=async e=>{e.preventDefault();const p=Object.fromEntries(new FormData(e.target));try{const d=await api('/audits',{method:'POST',body:JSON.stringify(p)});openAudit(d.id)}catch(err){toast(err.message)}};
+  $('#createAudit').onsubmit=async e=>{
+    e.preventDefault();
+    const form=e.target;
+    const p=Object.fromEntries(new FormData(form));
+    const submit=form.querySelector('button[type="submit"],button:not([type])');
+    if(submit)submit.disabled=true;
+    try{
+      const d=await api('/audits',{method:'POST',body:JSON.stringify(p)});
+      openAudit(d.id);
+    }catch(err){
+      // На телефоне мог сохраниться старый employee_id после удаления/пересоздания сотрудника.
+      if(/Сотрудник не найден/i.test(err.message||'')){
+        clearEmployeeCache(p.region_id);
+        const fresh=await getEmployees(p.region_id,{force:true}).catch(()=>[]);
+        const selectedText=$('#employee')?.selectedOptions?.[0]?.textContent?.trim()||'';
+        const replacement=fresh.find(x=>x.full_name===selectedText||x.name===selectedText);
+        $('#employee').innerHTML='<option value="">Выберите сотрудника</option>'+fresh.map(x=>`<option value="${x.id}" data-leader="${x.leader_id||''}">${esc(x.full_name||x.name)}</option>`).join('');
+        if(replacement){
+          $('#employee').value=replacement.id;
+          toast('Список сотрудников обновлён. Нажмите «Создать аудит» ещё раз.');
+        }else{
+          toast('Список сотрудников обновлён. Выберите сотрудника повторно.');
+        }
+      }else toast(err.message);
+    }finally{if(submit)submit.disabled=false}
+  };
 }
 async function openAudit(id){try{if(!state.questions.length){state.questions=await api('/audits/questionnaire');localStorage.setItem('sle_questions',JSON.stringify(state.questions))}state.audit=await api('/audits/'+id);if(state.audit.status==='completed')return renderResult(state.audit);state.visit=state.audit.current_visit||0;state.step=state.audit.current_step||0;renderWizard()}catch(e){toast(e.message)}}
 function answersMap(){const m={};for(const a of state.audit.answers)m[`${a.visit_number}:${a.question_key}`]=a;return m}
