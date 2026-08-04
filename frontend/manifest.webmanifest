@@ -1,9 +1,0 @@
-{
-  "name":"SLE — оценка визитов",
-  "short_name":"SLE",
-  "start_url":"/",
-  "display":"standalone",
-  "background_color":"#f3f4f6",
-  "theme_color":"#ffd400",
-  "icons":[{"src":"/assets/icons/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
-}
