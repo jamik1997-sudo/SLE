@@ -1,7 +1,7 @@
 from datetime import datetime, date
 import logging
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, text
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from app.database import get_db
@@ -442,6 +442,16 @@ def batch_sync(audit_id: str, payload: BatchSyncIn, db: Session = Depends(get_db
         raise HTTPException(400, "Аудит завершён")
 
     try:
+        # Serialize autosave requests for the same audit. Mobile browsers can
+        # dispatch answer and visit-field saves almost simultaneously. Without
+        # a per-audit transaction lock, two requests may both decide that an
+        # answer does not exist and then collide on the unique constraint.
+        if db.bind is not None and db.bind.dialect.name == "postgresql":
+            db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:audit_id))"),
+                {"audit_id": str(audit_id)},
+            )
+
         # Deduplicate the incoming batch defensively. The last value wins.
         incoming = {}
         for item in payload.answers or []:
