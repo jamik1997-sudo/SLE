@@ -34,22 +34,27 @@ def load_audit_basic(db: Session, audit_id: str) -> Audit:
     return audit
 
 
-def reset_if_stale(db: Session, audit: Audit) -> bool:
-    """Черновик предыдущего дня нельзя продолжать: он очищается и начинается заново сегодня."""
-    if audit.status not in (AuditStatus.draft, AuditStatus.in_progress):
-        return False
+def purge_stale_drafts(db: Session) -> list[str]:
+    """Полностью удаляет незавершённые аудиты прошлых дней по времени Ташкента."""
     from zoneinfo import ZoneInfo
-    today=datetime.now(ZoneInfo("Asia/Tashkent")).date()
-    if audit.audit_date == today:
-        return False
-    db.execute(delete(Answer).where(Answer.audit_id==audit.id))
-    db.execute(delete(VisitTiming).where(VisitTiming.audit_id==audit.id))
-    visits=db.scalars(select(Visit).where(Visit.audit_id==audit.id)).all()
-    for v in visits:
-        v.shop_code=None; v.goal=None; v.latitude=None; v.longitude=None; v.gps_accuracy=None; v.location_received_at=None; v.comment=None
-    audit.audit_date=today; audit.current_visit=0; audit.current_step=0; audit.status=AuditStatus.draft; audit.last_saved_at=datetime.utcnow()
+
+    today = datetime.now(ZoneInfo("Asia/Tashkent")).date()
+    stale_ids = list(db.scalars(
+        select(Audit.id).where(
+            Audit.status.in_([AuditStatus.draft, AuditStatus.in_progress]),
+            Audit.audit_date < today,
+        )
+    ).all())
+    if not stale_ids:
+        return []
+
+    db.execute(delete(Answer).where(Answer.audit_id.in_(stale_ids)))
+    db.execute(delete(VisitTiming).where(VisitTiming.audit_id.in_(stale_ids)))
+    db.execute(delete(Visit).where(Visit.audit_id.in_(stale_ids)))
+    db.execute(delete(Audit).where(Audit.id.in_(stale_ids)))
     db.commit()
-    return True
+    clear_cache()
+    return stale_ids
 
 
 def ensure_region_access(user: User, region_id: str):
@@ -102,6 +107,7 @@ def employees(region_id: str | None = None, db: Session = Depends(get_db), user:
 
 @router.get("")
 def list_audits(limit: int = 100, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    purge_stale_drafts(db)
     stmt = select(Audit).options(selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor), selectinload(Audit.leader)).where(Audit.status != AuditStatus.cancelled).order_by(Audit.last_saved_at.desc())
     if user.role == Role.leader:
         stmt = stmt.where(Audit.region_id.in_(allowed_regions(user)))
@@ -358,6 +364,7 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
 
 @router.post("")
 def create_audit(payload: AuditCreate, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    purge_stale_drafts(db)
     employee=db.get(Employee,payload.employee_id)
     if not employee or not employee.is_active: raise HTTPException(404,"Сотрудник не найден")
     region_id=payload.region_id or employee.region_id
@@ -382,8 +389,10 @@ def create_audit(payload: AuditCreate, db: Session = Depends(get_db), user: User
 
 @router.get("/{audit_id}")
 def get_audit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    deleted_ids = purge_stale_drafts(db)
+    if audit_id in deleted_ids:
+        raise HTTPException(410, "Незавершённый аудит прошлого дня удалён автоматически")
     audit = load_audit(db, audit_id); ensure_access(user, audit)
-    if reset_if_stale(db, audit): audit = load_audit(db, audit_id)
     return {
         "id":audit.id,"audit_date":audit.audit_date,"region_id":audit.region_id,"region_name":audit.region.name,
         "employee_id":audit.employee_id,"employee_name":audit.employee.full_name,"leader_id":audit.leader_id,"leader_name":audit.leader.full_name if audit.leader else None,"status":audit.status.value,
@@ -543,21 +552,88 @@ def batch_sync(audit_id: str, payload: BatchSyncIn, db: Session = Depends(get_db
 
 @router.post("/{audit_id}/submit")
 def submit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    audit = load_audit(db, audit_id); ensure_access(user, audit, write=True)
-    qrows = db.scalars(select(QuestionSetting).where(QuestionSetting.is_active == True).order_by(QuestionSetting.sort_order)).all()
-    questions = [{"key":q.key,"section":q.section,"step":q.step,"weight":q.weight,"is_active":q.is_active} for q in qrows] or QUESTIONS
-    answer_map = {(a.visit_number, a.question_key): a for a in audit.answers}
+    # Загружаем аудит и затем читаем ответы/визиты отдельными запросами.
+    # Это исключает устаревшие relationship-коллекции после автосохранения.
+    audit = load_audit_basic(db, audit_id)
+    ensure_access(user, audit, write=True)
+
+    qrows = db.scalars(
+        select(QuestionSetting)
+        .where(QuestionSetting.is_active == True)
+        .order_by(QuestionSetting.sort_order)
+    ).all()
+    questions = [
+        {"key": q.key, "section": q.section, "step": q.step, "weight": q.weight, "is_active": q.is_active}
+        for q in qrows
+    ] or QUESTIONS
+
+    answers = db.scalars(select(Answer).where(Answer.audit_id == audit.id)).all()
+    visits_rows = db.scalars(
+        select(Visit).where(Visit.audit_id == audit.id).order_by(Visit.visit_number)
+    ).all()
+    answer_map = {(a.visit_number, a.question_key): a for a in answers}
+    question_by_key = {q["key"]: q for q in questions}
+
     missing = []
+    missing_labels = []
     for q in questions:
-        visits = [0] if q["step"] in (0, 8) else range(1, 6)
-        for n in visits:
-            if (n, q["key"]) not in answer_map: missing.append(f"{n}:{q['key']}")
-    for v in audit.visits:
-        if not v.shop_code: missing.append(f"visit:{v.visit_number}:shop_code")
-        if v.latitude is None or v.longitude is None: missing.append(f"visit:{v.visit_number}:gps")
-    if missing: raise HTTPException(422, detail={"message":"Аудит заполнен не полностью","missing":missing})
+        required_visits = [0] if q["step"] in (0, 8) else range(1, 6)
+        for visit_number in required_visits:
+            answer = answer_map.get((visit_number, q["key"]))
+            if answer is None or str(answer.answer_value) not in ("0", "1"):
+                missing.append(f"{visit_number}:{q['key']}")
+                where = "Общая информация" if visit_number == 0 and q["step"] == 0 else (
+                    "Завершение дня" if visit_number == 0 else f"Визит {visit_number}, шаг {q['step']}"
+                )
+                missing_labels.append(f"{where}: {q['section']}")
+
+    existing_visit_numbers = {v.visit_number for v in visits_rows}
+    for visit_number in range(1, 6):
+        if visit_number not in existing_visit_numbers:
+            missing.append(f"visit:{visit_number}:missing")
+            missing_labels.append(f"Визит {visit_number}: данные визита отсутствуют")
+            continue
+        v = next(x for x in visits_rows if x.visit_number == visit_number)
+        if not (v.shop_code or "").strip():
+            missing.append(f"visit:{visit_number}:shop_code")
+            missing_labels.append(f"Визит {visit_number}: код ТТ")
+        if not (v.goal or "").strip():
+            missing.append(f"visit:{visit_number}:goal")
+            missing_labels.append(f"Визит {visit_number}: цель визита")
+        if v.latitude is None or v.longitude is None:
+            missing.append(f"visit:{visit_number}:gps")
+            missing_labels.append(f"Визит {visit_number}: GPS")
+
+    if missing:
+        # Убираем повторы, сохраняя порядок, чтобы сообщение было читаемым.
+        labels = list(dict.fromkeys(missing_labels))
+        raise HTTPException(
+            422,
+            detail={
+                "message": "Аудит заполнен не полностью",
+                "missing": missing,
+                "missing_labels": labels,
+            },
+        )
+
+    # calculate() использует relationship-коллекции. Обновляем их из БД
+    # перед расчётом, чтобы результат соответствовал последнему sync.
+    db.expire(audit, ["answers", "visits"])
+    audit = load_audit(db, audit_id)
     ss = db.get(ScoreSetting, 1) or ScoreSetting(id=1)
     total, percent, level, sections = calculate(audit, questions, ss.confident_min, ss.master_min)
-    audit.total_score=total; audit.total_percent=percent; audit.level=level; audit.status=AuditStatus.completed; audit.submitted_at=datetime.utcnow(); audit.last_saved_at=datetime.utcnow()
-    db.add(ActivityLog(user_id=user.id,action="Завершил аудит",entity_type="audit",entity_id=audit.id,details=f"{percent}% {level}"))
-    db.commit(); return {"total_score":total,"total_percent":percent,"level":level,"sections":sections}
+    audit.total_score = total
+    audit.total_percent = percent
+    audit.level = level
+    audit.status = AuditStatus.completed
+    audit.submitted_at = datetime.utcnow()
+    audit.last_saved_at = datetime.utcnow()
+    db.add(ActivityLog(
+        user_id=user.id,
+        action="Завершил аудит",
+        entity_type="audit",
+        entity_id=audit.id,
+        details=f"{percent}% {level}",
+    ))
+    db.commit()
+    return {"total_score": total, "total_percent": percent, "level": level, "sections": sections}

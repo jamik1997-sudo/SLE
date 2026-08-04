@@ -70,7 +70,7 @@ async function newAuditForm(){
     }finally{if(submit)submit.disabled=false}
   };
 }
-async function openAudit(id){try{if(!state.questions.length){state.questions=await api('/audits/questionnaire');localStorage.setItem('sle_questions',JSON.stringify(state.questions))}state.audit=await api('/audits/'+id);if(state.audit.status==='completed')return renderResult(state.audit);state.visit=state.audit.current_visit||0;state.step=state.audit.current_step||0;renderWizard()}catch(e){toast(e.message)}}
+async function openAudit(id){try{state.questions=await api('/audits/questionnaire',{force:true});localStorage.setItem('sle_questions',JSON.stringify(state.questions));state.audit=await api('/audits/'+id,{force:true});if(state.audit.status==='completed')return renderResult(state.audit);state.visit=state.audit.current_visit||0;state.step=state.audit.current_step||0;renderWizard()}catch(e){if(/прошлого дня|не найден/i.test(e.message)){localStorage.removeItem('sle_draft_'+id);state.audits=state.audits.filter(a=>a.id!==id);localStorage.setItem('sle_audits_cache',JSON.stringify(state.audits));toast(e.message);return home()}toast(e.message)}}
 function answersMap(){const m={};for(const a of state.audit.answers)m[`${a.visit_number}:${a.question_key}`]=a;return m}
 function stepMeta(){if(state.step===0)return{title:'Общая информация',sub:'Заполняется один раз',screen:1};if(state.step===8)return{title:'Завершение дня',sub:'После пяти завершённых визитов',screen:37};return{title:['','Шаг №1 Подготовка','Шаг №2 Представление','Шаг №3 Осмотр','Шаг №4 Предложение','Шаг №5 Работа в точке','Шаг №6 Завершение визита','Шаг №7 Анализ визита'][state.step],sub:`Визит ${state.visit} из 5 · Шаг ${state.step} из 7`,screen:1+(state.visit-1)*7+state.step}}
 function renderWizard(){

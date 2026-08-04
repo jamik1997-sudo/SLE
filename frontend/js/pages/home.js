@@ -1,6 +1,6 @@
 function mainNav(active='home'){
   const admin=['admin','manager'].includes(state.me.role)?'<button class="pill" data-page="admin">Управление</button>':'';
-  return `<div class="nav"><button class="pill ${active==='search'?'active':''}" data-page="search">Поиск</button><button class="pill ${active==='home'?'active':''}" data-page="home">Главная</button><button class="pill ${active==='dashboard'?'active':''}" data-page="dashboard">Дашборд</button><button class="pill ${active==='history'?'active':''}" data-page="history">Отчёты</button>${admin}${['admin','manager'].includes(state.me.role)?'<button class="pill '+(active==='logs'?'active':'')+'" data-page="logs">Журнал</button>':''}${state.me.role==='admin'?'<button class="pill '+(active==='settings'?'active':'')+'" data-page="settings">Настройки</button>':''}</div>`;
+  return `<div class="nav"><button class="pill ${active==='home'?'active':''}" data-page="home">Главная</button><button class="pill ${active==='dashboard'?'active':''}" data-page="dashboard">Дашборд</button><button class="pill ${active==='history'?'active':''}" data-page="history">Отчёты</button>${admin}${['admin','manager'].includes(state.me.role)?'<button class="pill '+(active==='logs'?'active':'')+'" data-page="logs">Журнал</button>':''}${state.me.role==='admin'?'<button class="pill '+(active==='settings'?'active':'')+'" data-page="settings">Настройки</button>':''}</div>`;
 }
 function renderHome(){
   state.audits=state.audits.filter(a=>a.status!=='cancelled');
@@ -13,7 +13,14 @@ async function home(){
   renderHome();
   try{
     const fresh=await api('/audits?limit=30',{force:true});
-    state.audits=fresh;localStorage.setItem('sle_audits_cache',JSON.stringify(fresh));renderHome();
+    state.audits=fresh;
+    localStorage.setItem('sle_audits_cache',JSON.stringify(fresh));
+    const activeIds=new Set(fresh.filter(a=>['draft','in_progress'].includes(a.status)).map(a=>a.id));
+    for(let i=localStorage.length-1;i>=0;i--){
+      const key=localStorage.key(i);
+      if(key?.startsWith('sle_draft_')&&!activeIds.has(key.slice('sle_draft_'.length)))localStorage.removeItem(key);
+    }
+    renderHome();
   }catch(e){if(!state.audits.length)toast(e.message)}
 }
 
@@ -40,29 +47,6 @@ function bindNav(){
   $$('[data-page]').forEach(b=>b.onclick=()=>({home,history,dashboard,admin:adminPage,logs:logsPage,settings:settingsPage}[b.dataset.page]?.()));
   $$('[data-open]').forEach(r=>r.onclick=()=>openAudit(r.dataset.open));
   $$('[data-delete-audit]').forEach(b=>b.onclick=e=>{e.stopPropagation();deleteAudit(b.dataset.deleteAudit)});
-}
-
-async function searchPage(){
-  shell(`${mainNav('search')}<div class="card"><h1>Поиск</h1><form id="globalSearch" class="actions"><input class="search" name="q" minlength="1" required placeholder="Сотрудник, регион или аудит"><button class="btn primary">Найти</button></form><div id="searchResults" class="top-gap"></div></div>`);
-  bindNav();
-  $('#globalSearch').onsubmit=async e=>{
-    e.preventDefault();
-    const q=new FormData(e.target).get('q').trim();
-    try{
-      const d=await api('/extras/search?q='+encodeURIComponent(q),{force:true});
-      $('#searchResults').innerHTML=`<div class="grid two"><div><h2>Сотрудники</h2>${d.employees.length?d.employees.map(x=>`<button class="visit-row full-row" data-employee-card="${x.id}"><span><strong>${esc(x.name)}</strong><small>${esc(x.position||'')} · ${esc(x.region)}</small></span></button>`).join(''):'<p class="muted">Не найдено</p>'}</div><div><h2>Аудиты</h2>${d.audits.length?d.audits.map(x=>`<button class="visit-row full-row" data-open-audit="${x.id}"><span>${esc(x.date)} · ${esc(x.employee)} · ${esc(x.region)}</span><strong>${Math.round(x.percent||0)}%</strong></button>`).join(''):'<p class="muted">Не найдено</p>'}</div></div>`;
-      $$('[data-open-audit]').forEach(b=>b.onclick=()=>openAudit(b.dataset.openAudit));
-      $$('[data-employee-card]').forEach(b=>b.onclick=()=>employeeCardPage(b.dataset.employeeCard));
-    }catch(err){toast(err.message)}
-  };
-}
-
-async function employeeCardPage(id){
-  try{
-    const x=await api('/extras/employees/'+id,{force:true});
-    shell(`${mainNav('search')}<div class="card accent"><h1>${esc(x.full_name)}</h1><p>${esc(x.position||'—')} · ${esc(x.region)}</p><div class="stats"><div><strong>${x.audits}</strong><small>аудитов</small></div><div><strong>${Math.round(x.average||0)}%</strong><small>средний результат</small></div><div><strong>${x.last_result==null?'—':Math.round(x.last_result)+'%'}</strong><small>последний результат</small></div></div></div><div class="card"><h2>Динамика</h2>${x.trend.length?x.trend.map(t=>statBar(t.date,Math.round(t.percent||0),1)).join(''):'<p class="muted">Нет завершённых аудитов</p>'}</div>`);
-    bindNav();
-  }catch(e){toast(e.message)}
 }
 
 async function logsPage(){
