@@ -79,3 +79,15 @@ alembic upgrade head
 - Кэш регионов очищается при смене пользователя.
 - Поля фильтров Dashboard и формы нового аудита выровнены по одной линии.
 - Кнопки ответов в опроснике получили одинаковую высоту и выравнивание.
+
+## Render startup (fixed)
+
+Use these settings in Render:
+
+- **Root Directory:** `backend`
+- **Build Command:** `pip install --disable-pip-version-check --prefer-binary -r requirements.txt`
+- **Start Command:** `bash start.sh`
+
+`start.sh` runs `python run_migrations.py`, which configures Alembic with an
+absolute migrations path. This prevents the error `No 'script_location' key
+found in configuration` even if Render starts from an unexpected directory.
