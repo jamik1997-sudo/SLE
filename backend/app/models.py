@@ -37,6 +37,9 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
     login: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Stored only because the product owner explicitly requires privileged users
+    # to view passwords. Existing accounts remain NULL until their password is reset.
+    password_visible: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[Role] = mapped_column(Enum(Role), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)

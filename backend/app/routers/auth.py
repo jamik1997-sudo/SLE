@@ -56,6 +56,7 @@ def change_password(
     if payload.current_password == payload.new_password:
         raise HTTPException(status_code=422, detail="Новый пароль должен отличаться от текущего")
     user.password_hash = hash_password(payload.new_password)
+    user.password_visible = payload.new_password
     user.must_change_password = False
     db.add(ActivityLog(user_id=user.id, action="Изменил пароль", entity_type="user", entity_id=user.id))
     db.commit()

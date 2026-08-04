@@ -69,3 +69,5 @@ input[readonly]{opacity:.9;cursor:not-allowed}
 .question .answer{min-height:46px;display:flex;align-items:center;justify-content:center;text-align:center}
 .question-title{min-height:2.8em;display:flex;align-items:flex-start}
 @media(max-width:900px){.grid.four,.audit-create-grid{align-items:stretch}.dashboard-filters .field label,.audit-create-grid .field label{min-height:auto}}
+
+.password-view{display:flex;align-items:center;gap:8px;min-width:180px}.password-view code{font-size:13px;overflow-wrap:anywhere;white-space:normal;color:var(--text)}

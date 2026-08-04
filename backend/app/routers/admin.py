@@ -17,9 +17,28 @@ def _ensure_can_manage(actor: User, target: User):
 
 
 @router.get("/users")
-def users(db: Session = Depends(get_db), _: User = Depends(require_roles(Role.admin, Role.manager))):
+def users(db: Session = Depends(get_db), actor: User = Depends(require_roles(Role.admin, Role.manager))):
     rows = db.scalars(select(User).options(selectinload(User.regions).selectinload(UserRegion.region)).where(User.is_active == True).order_by(User.full_name)).all()
-    return [{"id":u.id,"full_name":u.full_name,"login":u.login,"role":u.role.value,"is_active":u.is_active,"regions":[{"id":x.region.id,"name":x.region.name} for x in u.regions],"device_bound":bool(u.device_id) if u.role==Role.leader else False,"device_name":u.device_name if u.role==Role.leader else None,"device_bound_at":u.device_bound_at.isoformat() if u.device_bound_at else None,"can_change_credentials": not (_.role==Role.manager and u.role==Role.admin)} for u in rows]
+    result = []
+    for u in rows:
+        # Administrators can view every stored display password. Managers can
+        # view passwords of non-administrator accounts only.
+        can_view_password = actor.role == Role.admin or (actor.role == Role.manager and u.role != Role.admin)
+        result.append({
+            "id": u.id,
+            "full_name": u.full_name,
+            "login": u.login,
+            "role": u.role.value,
+            "is_active": u.is_active,
+            "regions": [{"id": x.region.id, "name": x.region.name} for x in u.regions],
+            "device_bound": bool(u.device_id) if u.role == Role.leader else False,
+            "device_name": u.device_name if u.role == Role.leader else None,
+            "device_bound_at": u.device_bound_at.isoformat() if u.device_bound_at else None,
+            "can_change_credentials": not (actor.role == Role.manager and u.role == Role.admin),
+            "can_view_password": can_view_password,
+            "password_visible": u.password_visible if can_view_password else None,
+        })
+    return result
 
 
 @router.post("/users")
@@ -32,7 +51,7 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db), actor: User 
     if payload.region_ids:
         valid=set(db.scalars(select(Region.id).where(Region.id.in_(payload.region_ids),Region.is_active==True)).all())
         if valid != set(payload.region_ids): raise HTTPException(422,"Выбран недействительный регион")
-    user=User(full_name=payload.full_name.strip(),login=login,password_hash=hash_password(payload.password),role=payload.role)
+    user=User(full_name=payload.full_name.strip(),login=login,password_hash=hash_password(payload.password),password_visible=payload.password,role=payload.role)
     db.add(user);db.flush()
     if payload.role==Role.leader: db.add(UserRegion(user_id=user.id,region_id=payload.region_ids[0]))
     db.add(ActivityLog(user_id=actor.id,action="Создал пользователя",entity_type="user",entity_id=user.id,details=user.full_name));db.commit()
@@ -56,7 +75,11 @@ def update_user(user_id: str, payload: dict, db: Session = Depends(get_db), acto
     target.full_name=full_name;target.login=login;target.role=role
     if role != Role.leader:
         target.device_id=None;target.device_name=None;target.device_bound_at=None
-    if payload.get("password"): target.password_hash=hash_password(str(payload["password"]));target.must_change_password=True
+    if payload.get("password"):
+        new_password = str(payload["password"])
+        target.password_hash = hash_password(new_password)
+        target.password_visible = new_password
+        target.must_change_password = True
     for ur in list(target.regions): db.delete(ur)
     if role==Role.leader: db.add(UserRegion(user_id=target.id,region_id=region_id))
     db.add(ActivityLog(user_id=actor.id,action="Изменил пользователя",entity_type="user",entity_id=target.id,details=target.full_name));db.commit()
