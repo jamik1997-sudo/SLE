@@ -37,7 +37,7 @@ async function deleteAudit(id){
 }
 function statusName(s){return({draft:'Черновик',in_progress:'В процессе',completed:'Завершён',cancelled:'Отменён'})[s]||s}
 function bindNav(){
-  $$('[data-page]').forEach(b=>b.onclick=()=>({home,history,dashboard,admin:adminPage,search:searchPage,logs:logsPage,settings:settingsPage}[b.dataset.page]?.()));
+  $$('[data-page]').forEach(b=>b.onclick=()=>({home,history,dashboard,admin:adminPage,logs:logsPage,settings:settingsPage}[b.dataset.page]?.()));
   $$('[data-open]').forEach(r=>r.onclick=()=>openAudit(r.dataset.open));
   $$('[data-delete-audit]').forEach(b=>b.onclick=e=>{e.stopPropagation();deleteAudit(b.dataset.deleteAudit)});
 }

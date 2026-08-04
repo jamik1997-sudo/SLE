@@ -14,6 +14,7 @@ class Role(str, enum.Enum):
     admin = "admin"
     manager = "manager"
     leader = "leader"
+    auditor = "auditor"
 
 
 class AuditStatus(str, enum.Enum):
@@ -105,6 +106,7 @@ class Visit(Base):
     longitude: Mapped[float | None] = mapped_column(Float)
     gps_accuracy: Mapped[float | None] = mapped_column(Float)
     location_received_at: Mapped[datetime | None] = mapped_column(DateTime)
+    goal: Mapped[str | None] = mapped_column(Text)
     comment: Mapped[str | None] = mapped_column(Text)
 
 

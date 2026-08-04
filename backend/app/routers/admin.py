@@ -19,7 +19,7 @@ def _ensure_can_manage(actor: User, target: User):
 @router.get("/users")
 def users(db: Session = Depends(get_db), _: User = Depends(require_roles(Role.admin, Role.manager))):
     rows = db.scalars(select(User).options(selectinload(User.regions).selectinload(UserRegion.region)).where(User.is_active == True).order_by(User.full_name)).all()
-    return [{"id":u.id,"full_name":u.full_name,"login":u.login,"role":u.role.value,"is_active":u.is_active,"regions":[{"id":x.region.id,"name":x.region.name} for x in u.regions],"device_bound":bool(u.device_id) if u.role==Role.leader else False,"device_name":u.device_name if u.role==Role.leader else None,"device_bound_at":u.device_bound_at.isoformat() if u.device_bound_at else None} for u in rows]
+    return [{"id":u.id,"full_name":u.full_name,"login":u.login,"role":u.role.value,"is_active":u.is_active,"regions":[{"id":x.region.id,"name":x.region.name} for x in u.regions],"device_bound":bool(u.device_id) if u.role==Role.leader else False,"device_name":u.device_name if u.role==Role.leader else None,"device_bound_at":u.device_bound_at.isoformat() if u.device_bound_at else None,"can_change_credentials": not (_.role==Role.manager and u.role==Role.admin)} for u in rows]
 
 
 @router.post("/users")
@@ -27,7 +27,7 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db), actor: User 
     login = payload.login.strip().lower()
     if db.scalar(select(User).where(func.lower(User.login) == login)): raise HTTPException(409, "Логин уже используется")
     if actor.role == Role.manager and payload.role == Role.admin: raise HTTPException(403, "Менеджер не может создавать администратора")
-    if payload.role in (Role.admin, Role.manager) and payload.region_ids: raise HTTPException(422, "Для администратора и менеджера регион не назначается")
+    if payload.role in (Role.admin, Role.manager, Role.auditor) and payload.region_ids: raise HTTPException(422, "Для администратора, менеджера и аудитора регион не назначается")
     if payload.role == Role.leader and len(set(payload.region_ids)) != 1: raise HTTPException(422, "Для руководителя необходимо выбрать один регион")
     if payload.region_ids:
         valid=set(db.scalars(select(Region.id).where(Region.id.in_(payload.region_ids),Region.is_active==True)).all())

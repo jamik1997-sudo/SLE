@@ -54,3 +54,7 @@
   max-width:100%;
   overflow-wrap:anywhere;
 }
+
+/* v3.4 workflow improvements */
+input[readonly]{opacity:.9;cursor:not-allowed}
+@media(max-width:640px){.bottom .actions{display:flex;flex-direction:column-reverse;width:100%;gap:12px}.bottom .actions .btn{width:100%;min-height:52px}}

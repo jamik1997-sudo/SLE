@@ -21,6 +21,7 @@ def initialize_database() -> None:
     with engine.begin() as conn:
         if engine.dialect.name == "postgresql":
             conn.execute(text("ALTER TABLE visits ADD COLUMN IF NOT EXISTS shop_name VARCHAR(200)"))
+            conn.execute(text("ALTER TABLE visits ADD COLUMN IF NOT EXISTS goal TEXT"))
             conn.execute(text("ALTER TABLE employees ADD COLUMN IF NOT EXISTS leader_id VARCHAR(36)"))
             conn.execute(text("ALTER TABLE audits ADD COLUMN IF NOT EXISTS leader_id VARCHAR(36)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_employees_leader_id ON employees(leader_id)"))

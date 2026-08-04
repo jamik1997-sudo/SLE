@@ -51,6 +51,8 @@ def startup():
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS device_id VARCHAR(120)"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS device_name VARCHAR(240)"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS device_bound_at TIMESTAMP"))
+            conn.execute(text("ALTER TABLE visits ADD COLUMN IF NOT EXISTS goal TEXT"))
+            conn.execute(text("ALTER TYPE role ADD VALUE IF NOT EXISTS 'auditor'"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_employees_leader_id ON employees(leader_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_audits_leader_id ON audits(leader_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_device_id ON users(device_id)"))

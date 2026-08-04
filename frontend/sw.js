@@ -1,4 +1,4 @@
-const CACHE_VERSION = "sle-audit-v3.3.7-delete-dashboard-fix";
+const CACHE_VERSION = "sle-audit-v3.4.0";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const APP_SHELL = [
   '/',

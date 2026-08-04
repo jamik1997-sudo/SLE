@@ -52,7 +52,7 @@ class EmployeeOut(BaseModel):
 
 
 class AuditCreate(BaseModel):
-    audit_date: date
+    audit_date: date | None = None
     employee_id: str
     region_id: str | None = None
     leader_id: str | None = None
@@ -60,6 +60,7 @@ class AuditCreate(BaseModel):
 
 class VisitSave(BaseModel):
     shop_code: str | None = None
+    goal: str | None = None
     latitude: float | None = None
     longitude: float | None = None
     gps_accuracy: float | None = None

@@ -144,7 +144,7 @@ function startKeepAlive(){
 }
 
 function esc(v=''){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function roleName(role){return role==='admin'?'Администратор':role==='manager'?'Менеджер':'Руководитель'}
+function roleName(role){return role==='admin'?'Администратор':role==='manager'?'Менеджер':role==='auditor'?'Аудитор':'Руководитель'}
 function applyTheme(){document.documentElement.dataset.theme=state.theme;document.querySelector('meta[name="theme-color"]')?.setAttribute('content',state.theme==='dark'?'#111318':'#ffd400')}
 function toggleTheme(){state.theme=state.theme==='dark'?'light':'dark';localStorage.setItem('sle_theme',state.theme);applyTheme();const b=$('#themeToggle');if(b)b.textContent=state.theme==='dark'?'☀️':'🌙'}
 function shell(content){

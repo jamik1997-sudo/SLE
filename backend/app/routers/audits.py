@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, delete
 from sqlalchemy.orm import Session, selectinload
@@ -33,6 +33,24 @@ def load_audit_basic(db: Session, audit_id: str) -> Audit:
     return audit
 
 
+def reset_if_stale(db: Session, audit: Audit) -> bool:
+    """Черновик предыдущего дня нельзя продолжать: он очищается и начинается заново сегодня."""
+    if audit.status not in (AuditStatus.draft, AuditStatus.in_progress):
+        return False
+    from zoneinfo import ZoneInfo
+    today=datetime.now(ZoneInfo("Asia/Tashkent")).date()
+    if audit.audit_date == today:
+        return False
+    db.execute(delete(Answer).where(Answer.audit_id==audit.id))
+    db.execute(delete(VisitTiming).where(VisitTiming.audit_id==audit.id))
+    visits=db.scalars(select(Visit).where(Visit.audit_id==audit.id)).all()
+    for v in visits:
+        v.shop_code=None; v.goal=None; v.latitude=None; v.longitude=None; v.gps_accuracy=None; v.location_received_at=None; v.comment=None
+    audit.audit_date=today; audit.current_visit=0; audit.current_step=0; audit.status=AuditStatus.draft; audit.last_saved_at=datetime.utcnow()
+    db.commit()
+    return True
+
+
 def ensure_region_access(user: User, region_id: str):
     if user.role == Role.leader and region_id not in allowed_regions(user):
         raise HTTPException(403, "Нет доступа к региону")
@@ -42,7 +60,7 @@ def ensure_access(user: User, audit: Audit, *, write: bool = False):
     # Администратор и менеджер имеют доступ по всей республике.
     ensure_region_access(user, audit.region_id)
     # Руководитель может просматривать данные своего региона, но менять только собственный аудит.
-    if write and user.role == Role.leader and audit.auditor_id != user.id:
+    if write and user.role in (Role.leader, Role.auditor) and audit.auditor_id != user.id:
         raise HTTPException(403, "Можно изменять только собственный аудит")
 
 
@@ -142,7 +160,7 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
         ensure_region_access(user, region_id)
         stmt = stmt.where(Audit.region_id == region_id)
     if auditor_id:
-        stmt = stmt.where(Audit.leader_id == auditor_id)
+        stmt = stmt.where(Audit.auditor_id == auditor_id)
     if employee_id:
         stmt = stmt.where(Audit.employee_id == employee_id)
     if month:
@@ -309,7 +327,7 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
     if user.role == Role.leader:
         region_stmt = region_stmt.where(Region.id.in_(allowed_regions(user)))
     option_regions = db.scalars(region_stmt).all()
-    auditor_stmt = select(User).where(User.is_active == True, User.role == Role.leader).order_by(User.full_name)
+    auditor_stmt = select(User).where(User.is_active == True, User.role.in_([Role.leader, Role.auditor, Role.manager, Role.admin])).order_by(User.full_name)
     if user.role == Role.leader:
         auditor_stmt = auditor_stmt.where(User.id == user.id)
     option_auditors = db.scalars(auditor_stmt).all()
@@ -348,12 +366,14 @@ def create_audit(payload: AuditCreate, db: Session = Depends(get_db), user: User
         leader_id=user.id
         if employee.leader_id and employee.leader_id!=user.id: raise HTTPException(403,"Сотрудник закреплён за другим руководителем")
     else:
-        leader_id=payload.leader_id or employee.leader_id
-        if user.role==Role.manager and not leader_id: raise HTTPException(422,"Выберите руководителя")
+        # Руководитель сотрудника определяется автоматически; отдельного выбора в форме нет.
+        leader_id=employee.leader_id
     leader=db.get(User,leader_id) if leader_id else None
-    if leader and (leader.role!=Role.leader or not leader.is_active): raise HTTPException(422,"Недействительный руководитель")
-    if employee.leader_id and leader_id!=employee.leader_id: raise HTTPException(422,"Выбранный сотрудник закреплён за другим руководителем")
-    audit=Audit(audit_date=payload.audit_date,employee_id=employee.id,region_id=region_id,auditor_id=user.id,leader_id=leader_id)
+    if leader and (leader.role!=Role.leader or not leader.is_active): raise HTTPException(422,"У сотрудника указан недействительный руководитель")
+    # Дата всегда устанавливается сервером по часовому поясу Узбекистана.
+    from zoneinfo import ZoneInfo
+    today_tashkent=datetime.now(ZoneInfo("Asia/Tashkent")).date()
+    audit=Audit(audit_date=today_tashkent,employee_id=employee.id,region_id=region_id,auditor_id=user.id,leader_id=leader_id)
     db.add(audit);db.flush()
     for n in range(1,6): db.add(Visit(audit_id=audit.id,visit_number=n))
     db.add(ActivityLog(user_id=user.id,action="Создал аудит",entity_type="audit",entity_id=audit.id,details=employee.full_name));db.commit();clear_cache("dashboard:");return {"id":audit.id}
@@ -362,12 +382,13 @@ def create_audit(payload: AuditCreate, db: Session = Depends(get_db), user: User
 @router.get("/{audit_id}")
 def get_audit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
     audit = load_audit(db, audit_id); ensure_access(user, audit)
+    if reset_if_stale(db, audit): audit = load_audit(db, audit_id)
     return {
         "id":audit.id,"audit_date":audit.audit_date,"region_id":audit.region_id,"region_name":audit.region.name,
         "employee_id":audit.employee_id,"employee_name":audit.employee.full_name,"leader_id":audit.leader_id,"leader_name":audit.leader.full_name if audit.leader else None,"status":audit.status.value,
         "current_visit":audit.current_visit,"current_step":audit.current_step,"total_score":audit.total_score,
         "total_percent":audit.total_percent,"level":audit.level,
-        "visits":[{"visit_number":v.visit_number,"shop_code":v.shop_code,"latitude":v.latitude,"longitude":v.longitude,"gps_accuracy":v.gps_accuracy,"comment":v.comment} for v in audit.visits],
+        "visits":[{"visit_number":v.visit_number,"shop_code":v.shop_code,"goal":v.goal,"latitude":v.latitude,"longitude":v.longitude,"gps_accuracy":v.gps_accuracy,"comment":v.comment} for v in audit.visits],
         "answers":[{"visit_number":a.visit_number,"question_key":a.question_key,"answer_value":a.answer_value,"comment":a.comment} for a in audit.answers],
     }
 
