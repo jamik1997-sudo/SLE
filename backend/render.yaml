@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: sle-audit-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install --disable-pip-version-check --prefer-binary -r requirements.txt
+    startCommand: alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port $PORT --no-access-log
+    healthCheckPath: /health
+    autoDeploy: true
+
+# Set in Render environment: TZ=Asia/Tashkent
