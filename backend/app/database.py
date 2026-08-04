@@ -4,7 +4,13 @@ from app.config import get_settings
 
 settings = get_settings()
 is_sqlite = settings.database_url.startswith("sqlite")
-connect_args = {"check_same_thread": False} if is_sqlite else {"connect_timeout": 10}
+connect_args = {"check_same_thread": False} if is_sqlite else {
+    "connect_timeout": 10,
+    # Supabase pooler / PgBouncer can reuse a server connection between clients.
+    # Disable psycopg 3 automatic prepared statements to prevent
+    # DuplicatePreparedStatement: prepared statement "_pg3_0" already exists.
+    "prepare_threshold": None,
+}
 engine_kwargs = {
     "pool_pre_ping": True,
     "connect_args": connect_args,
