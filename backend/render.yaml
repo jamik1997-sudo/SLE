@@ -4,7 +4,7 @@ services:
     runtime: python
     rootDir: backend
     buildCommand: pip install --disable-pip-version-check --prefer-binary -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --no-access-log
+    startCommand: alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port $PORT --no-access-log
     healthCheckPath: /health
     autoDeploy: true
 

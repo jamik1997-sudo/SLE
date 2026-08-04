@@ -48,3 +48,27 @@
 
 ## v3.3.4
 Администратор может полностью удалять аудиты из списков «Последние аудиты» и «Отчёты». Менеджер и руководитель удалить аудит не могут.
+
+## Миграции базы данных (Alembic)
+
+Структура базы больше не изменяется в `startup()` FastAPI. Перед запуском API Render выполняет:
+
+```bash
+alembic upgrade head
+```
+
+Команда запуска Render:
+
+```bash
+alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port $PORT --no-access-log
+```
+
+Для новой миграции локально:
+
+```bash
+cd backend
+alembic revision --autogenerate -m "описание изменения"
+alembic upgrade head
+```
+
+Первая миграция использует PostgreSQL advisory lock, поэтому два одновременных деплоя не смогут параллельно выполнять `ALTER TABLE` и создавать deadlock.
