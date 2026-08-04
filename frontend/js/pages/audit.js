@@ -25,10 +25,21 @@ function clearEmployeeCache(regionId){
   localStorage.removeItem('sle_employees_'+regionId);
 }
 async function newAuditForm(){
-  let regions=state.regions||[];try{if(!regions.length){regions=await api('/audits/regions');state.regions=regions;localStorage.setItem('sle_regions',JSON.stringify(regions))}}catch(e){return toast(e.message)}
-  const fixed=state.me.role==='leader';if(fixed&&regions.length!==1)return toast('Для руководителя должен быть назначен один регион');
-  let employees=[];if(fixed)employees=await getEmployees(regions[0].id);
-  shell(`<div class="card accent"><h1>Новый аудит</h1><form id="createAudit"><div class="grid two"><div class="field"><label>Дата</label><input type="date" name="audit_date" value="${tashkentToday()}" readonly aria-readonly="true"></div><div class="field"><label>Регион</label>${fixed?`<input value="${esc(regions[0].name)}" disabled><input type="hidden" name="region_id" value="${regions[0].id}">`:`<select name="region_id" id="region" required><option value="">Выберите регион</option>${regions.map(r=>`<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>`}</div><div class="field span-2"><label>Сотрудник</label><select name="employee_id" id="employee" required><option value="">Выберите сотрудника</option>${employees.map(x=>`<option value="${x.id}">${esc(x.full_name)}</option>`).join('')}</select></div></div><div class="actions top-gap"><button type="button" class="btn secondary" id="back">Назад</button><button class="btn primary">Создать аудит</button></div></form></div>`);
+  // Список регионов всегда обновляем с сервера. Это предотвращает ситуацию,
+  // когда после входа под другой роль в localStorage остаётся только один регион.
+  let regions=[];
+  try{
+    regions=await api('/audits/regions',{force:true});
+    state.regions=regions;
+    localStorage.setItem('sle_regions',JSON.stringify(regions));
+  }catch(e){
+    try{regions=JSON.parse(localStorage.getItem('sle_regions')||'[]')}catch{}
+    if(!regions.length)return toast(e.message);
+  }
+  const fixed=state.me.role==='leader';
+  if(fixed&&regions.length!==1)return toast('Для руководителя должен быть назначен один регион');
+  let employees=[];if(fixed)employees=await getEmployees(regions[0].id,{force:true});
+  shell(`<div class="card accent"><h1>Новый аудит</h1><form id="createAudit"><div class="grid two audit-create-grid"><div class="field"><label>Дата</label><input type="date" name="audit_date" value="${tashkentToday()}" readonly aria-readonly="true"></div><div class="field"><label>Регион</label>${fixed?`<input value="${esc(regions[0].name)}" disabled><input type="hidden" name="region_id" value="${regions[0].id}">`:`<select name="region_id" id="region" required><option value="">Выберите регион</option>${regions.map(r=>`<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select>`}</div><div class="field span-2"><label>Сотрудник</label><select name="employee_id" id="employee" required><option value="">Выберите сотрудника</option>${employees.map(x=>`<option value="${x.id}">${esc(x.full_name)}</option>`).join('')}</select></div></div><div class="actions top-gap"><button type="button" class="btn secondary" id="back">Назад</button><button class="btn primary">Создать аудит</button></div></form></div>`);
   $('#back').onclick=home;
   async function refreshEmployees(){const region=$('#region')?.value||regions[0]?.id||'';const list=region?await getEmployees(region):[];$('#employee').innerHTML='<option value="">Выберите сотрудника</option>'+list.map(x=>`<option value="${x.id}">${esc(x.full_name)}</option>`).join('')}
   $('#region')?.addEventListener('change',refreshEmployees);

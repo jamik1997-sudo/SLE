@@ -1,4 +1,5 @@
 from datetime import datetime, date
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, delete
 from sqlalchemy.orm import Session, selectinload
@@ -13,6 +14,7 @@ from app.services.scoring import calculate
 from app.cache import get_cache, set_cache, clear_cache
 
 router = APIRouter(prefix="/audits", tags=["audits"])
+sync_logger = logging.getLogger("sle.sync")
 
 
 def allowed_regions(user: User) -> set[str]:
@@ -505,6 +507,7 @@ def batch_sync(audit_id: str, payload: BatchSyncIn, db: Session = Depends(get_db
         raise HTTPException(409, "Конфликт сохранения. Повторите действие") from exc
     except SQLAlchemyError as exc:
         db.rollback()
+        sync_logger.exception("Database sync failed for audit %s", audit_id)
         raise HTTPException(500, "Ошибка базы данных при сохранении") from exc
 
 

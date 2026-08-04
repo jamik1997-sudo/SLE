@@ -58,3 +58,14 @@
 /* v3.4 workflow improvements */
 input[readonly]{opacity:.9;cursor:not-allowed}
 @media(max-width:640px){.bottom .actions{display:flex;flex-direction:column-reverse;width:100%;gap:12px}.bottom .actions .btn{width:100%;min-height:52px}}
+
+/* v3.4.3: unified alignment for filters and audit forms */
+.grid.four,.audit-create-grid{align-items:end}
+.grid.four>.field,.audit-create-grid>.field{margin-top:0;display:flex;flex-direction:column;min-width:0}
+.dashboard-filters .field label,.audit-create-grid .field label{min-height:20px;display:flex;align-items:flex-end}
+.dashboard-filters select,.audit-create-grid input:not([type="hidden"]),.audit-create-grid select{height:46px;min-height:46px}
+.dashboard-filters .grid.four{column-gap:14px;row-gap:14px}
+.question .answers.two-options{align-items:stretch}
+.question .answer{min-height:46px;display:flex;align-items:center;justify-content:center;text-align:center}
+.question-title{min-height:2.8em;display:flex;align-items:flex-start}
+@media(max-width:900px){.grid.four,.audit-create-grid{align-items:stretch}.dashboard-filters .field label,.audit-create-grid .field label{min-height:auto}}
