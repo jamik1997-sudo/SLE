@@ -6,6 +6,7 @@ from app.database import get_db
 from app.models import Employee, Region, Role, User, UserRegion, ActivityLog
 from app.schemas import UserCreate
 from app.security import hash_password, require_roles
+from app.cache import get_cache, set_cache, clear_cache
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -38,6 +39,10 @@ def _serialize_users(rows, actor: User):
 @router.get("/bootstrap")
 def bootstrap(db: Session = Depends(get_db), actor: User = Depends(require_roles(Role.admin, Role.manager))):
     """One round-trip for the management page instead of three parallel requests."""
+    cache_key = f"admin-bootstrap:v41:{actor.role.value}"
+    cached = get_cache(cache_key)
+    if cached is not None:
+        return cached
     user_rows = db.scalars(
         select(User).options(selectinload(User.regions).selectinload(UserRegion.region))
         .where(User.is_active == True).order_by(User.full_name)
@@ -50,7 +55,7 @@ def bootstrap(db: Session = Depends(get_db), actor: User = Depends(require_roles
         .where(Employee.is_active == True).join(Employee.region)
         .order_by(Region.name, Employee.full_name)
     ).all()
-    return {
+    return set_cache(cache_key, {
         "users": _serialize_users(user_rows, actor),
         "regions": [{"id": r.id, "name": r.name} for r in region_rows],
         "employees": [{
@@ -58,7 +63,7 @@ def bootstrap(db: Session = Depends(get_db), actor: User = Depends(require_roles
             "region_id": x.region_id, "region_name": x.region.name,
             "leader_id": x.leader_id, "leader_name": x.leader.full_name if x.leader else None,
         } for x in employee_rows],
-    }
+    }, ttl=60)
 
 
 @router.get("/users")
@@ -80,7 +85,7 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db), actor: User 
     user=User(full_name=payload.full_name.strip(),login=login,password_hash=hash_password(payload.password),password_visible=payload.password,role=payload.role)
     db.add(user);db.flush()
     if payload.role==Role.leader: db.add(UserRegion(user_id=user.id,region_id=payload.region_ids[0]))
-    db.add(ActivityLog(user_id=actor.id,action="Создал пользователя",entity_type="user",entity_id=user.id,details=user.full_name));db.commit()
+    db.add(ActivityLog(user_id=actor.id,action="Создал пользователя",entity_type="user",entity_id=user.id,details=user.full_name));db.commit(); clear_cache("admin-bootstrap:")
     return {"id":user.id}
 
 
