@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.exc import SQLAlchemyError
 from app.database import get_db
 from app.models import Employee, Region, Role, User, UserRegion, ActivityLog
 from app.schemas import UserCreate
@@ -60,30 +61,75 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db), actor: User 
 
 @router.put("/users/{user_id}")
 def update_user(user_id: str, payload: dict, db: Session = Depends(get_db), actor: User = Depends(require_roles(Role.admin, Role.manager))):
-    target=db.get(User,user_id)
-    if not target: raise HTTPException(404,"Пользователь не найден")
-    if actor.role==Role.manager and target.role==Role.admin: raise HTTPException(403,"Менеджер не может изменять администратора")
-    role=Role(payload.get("role",target.role.value))
-    if actor.role==Role.manager and role==Role.admin: raise HTTPException(403,"Менеджер не может назначать администратора")
-    full_name=str(payload.get("full_name",target.full_name)).strip()
-    login=str(payload.get("login",target.login)).strip().lower()
-    duplicate=db.scalar(select(User).where(func.lower(User.login)==login,User.id!=target.id))
-    if duplicate: raise HTTPException(409,"Логин уже используется")
-    region_id=payload.get("region_id")
-    if role==Role.leader:
-        if not region_id or not db.get(Region,region_id): raise HTTPException(422,"Для руководителя выберите регион")
-    target.full_name=full_name;target.login=login;target.role=role
-    if role != Role.leader:
-        target.device_id=None;target.device_name=None;target.device_bound_at=None
-    if payload.get("password"):
-        new_password = str(payload["password"])
-        target.password_hash = hash_password(new_password)
-        target.password_visible = new_password
-        target.must_change_password = True
-    for ur in list(target.regions): db.delete(ur)
-    if role==Role.leader: db.add(UserRegion(user_id=target.id,region_id=region_id))
-    db.add(ActivityLog(user_id=actor.id,action="Изменил пользователя",entity_type="user",entity_id=target.id,details=target.full_name));db.commit()
-    return {"saved":True}
+    target = db.get(User, user_id)
+    if not target:
+        raise HTTPException(404, "Пользователь не найден")
+    if actor.role == Role.manager and target.role == Role.admin:
+        raise HTTPException(403, "Менеджер не может изменять администратора")
+
+    try:
+        try:
+            role = Role(payload.get("role", target.role.value))
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(422, "Недопустимая роль") from exc
+
+        if actor.role == Role.manager and role == Role.admin:
+            raise HTTPException(403, "Менеджер не может назначать администратора")
+
+        full_name = str(payload.get("full_name", target.full_name)).strip()
+        login = str(payload.get("login", target.login)).strip().lower()
+        if not full_name:
+            raise HTTPException(422, "Введите ФИО")
+        if len(login) < 3:
+            raise HTTPException(422, "Логин должен содержать минимум 3 символа")
+        duplicate = db.scalar(select(User).where(func.lower(User.login) == login, User.id != target.id))
+        if duplicate:
+            raise HTTPException(409, "Логин уже используется")
+
+        region_id = payload.get("region_id")
+        if role == Role.leader:
+            region = db.get(Region, region_id) if region_id else None
+            if not region or not region.is_active:
+                raise HTTPException(422, "Для руководителя выберите действующий регион")
+
+        target.full_name = full_name
+        target.login = login
+        target.role = role
+        if role != Role.leader:
+            target.device_id = None
+            target.device_name = None
+            target.device_bound_at = None
+
+        if payload.get("password"):
+            new_password = str(payload["password"])
+            if len(new_password) < 8:
+                raise HTTPException(422, "Пароль должен содержать минимум 8 символов")
+            target.password_hash = hash_password(new_password)
+            target.password_visible = new_password
+            target.must_change_password = True
+
+        # Сначала физически удаляем прежние привязки и выполняем flush,
+        # чтобы повторный выбор того же региона не давал UniqueViolation.
+        db.execute(delete(UserRegion).where(UserRegion.user_id == target.id))
+        db.flush()
+        if role == Role.leader:
+            db.add(UserRegion(user_id=target.id, region_id=region_id))
+
+        db.add(ActivityLog(
+            user_id=actor.id,
+            action="Изменил пользователя",
+            entity_type="user",
+            entity_id=target.id,
+            details=target.full_name,
+        ))
+        db.commit()
+        return {"saved": True}
+    except HTTPException:
+        db.rollback()
+        raise
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(500, "Не удалось сохранить логин или пароль пользователя") from exc
 
 
 @router.post("/users/{user_id}/reset-device")

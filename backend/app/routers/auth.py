@@ -51,6 +51,8 @@ def change_password(
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
+    if user.role in (Role.leader, Role.auditor):
+        raise HTTPException(status_code=403, detail="Руководитель и аудитор не могут менять пароль самостоятельно. Обратитесь к администратору или менеджеру")
     if not verify_password(payload.current_password, user.password_hash):
         raise HTTPException(status_code=422, detail="Текущий пароль указан неверно")
     if payload.current_password == payload.new_password:

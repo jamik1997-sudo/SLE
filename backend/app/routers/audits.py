@@ -1,11 +1,11 @@
 from datetime import datetime, date
 import logging
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, delete, text
+from sqlalchemy import select, delete, text, or_
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from app.database import get_db
-from app.models import Answer, Audit, AuditStatus, Employee, Region, Role, User, Visit, VisitTiming, QuestionSetting, ScoreSetting, ActivityLog
+from app.models import Answer, Audit, AuditStatus, Employee, Region, Role, User, UserRegion, Visit, VisitTiming, QuestionSetting, ScoreSetting, ActivityLog
 from app.questionnaire import QUESTION_MAP, QUESTIONS
 from app.schemas import AnswerSave, AuditCreate, ProgressSave, VisitSave, BatchSyncIn
 from app.security import current_user
@@ -278,7 +278,16 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
     ], key=lambda x: x["month"])[-12:]
     # Each trading point is returned as a separate row in the recent audits table.
     recent = []
-    for a in rows[:10]:
+    recent_audits = rows[:10]
+    recent_ids = [a.id for a in recent_audits]
+    timing_map = {}
+    if recent_ids:
+        for timing in db.scalars(
+            select(VisitTiming).where(VisitTiming.audit_id.in_(recent_ids))
+        ).all():
+            timing_map[(timing.audit_id, timing.visit_number)] = timing
+    from app.timezone_utils import to_tashkent_naive
+    for a in recent_audits:
         answers_by_visit = {}
         for ans in a.answers:
             answers_by_visit.setdefault(ans.visit_number, []).append(ans)
@@ -318,10 +327,14 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
                 if visit.latitude is not None and visit.longitude is not None
                 else None
             )
+            timing = timing_map.get((a.id, visit.visit_number))
+            started_local = to_tashkent_naive(timing.started_at) if timing and timing.started_at else None
             recent.append({
                 "id": a.id,
                 "visit_number": visit.visit_number,
                 "audit_date": a.audit_date,
+                "visit_started_at": started_local.isoformat() if started_local else None,
+                "visit_start_time": started_local.strftime("%H:%M") if started_local else "—",
                 "shop_code": visit.shop_code or "—",
                 "total_percent": visit_percent,
                 "audit_percent": a.total_percent,
@@ -334,9 +347,24 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
     if user.role == Role.leader:
         region_stmt = region_stmt.where(Region.id.in_(allowed_regions(user)))
     option_regions = db.scalars(region_stmt).all()
-    auditor_stmt = select(User).where(User.is_active == True, User.role.in_([Role.leader, Role.auditor, Role.manager, Role.admin])).order_by(User.full_name)
+    # «Оценивающий»: для выбранного региона показываем руководителей этого
+    # региона, а аудиторов и менеджеров — по всей республике.
     if user.role == Role.leader:
-        auditor_stmt = auditor_stmt.where(User.id == user.id)
+        auditor_stmt = select(User).where(User.id == user.id, User.is_active == True)
+    else:
+        auditor_stmt = select(User).where(
+            User.is_active == True,
+            User.role.in_([Role.leader, Role.auditor, Role.manager]),
+        )
+        if region_id:
+            leader_ids = select(UserRegion.user_id).where(UserRegion.region_id == region_id)
+            auditor_stmt = auditor_stmt.where(
+                or_(
+                    User.role.in_([Role.auditor, Role.manager]),
+                    User.id.in_(leader_ids),
+                )
+            )
+        auditor_stmt = auditor_stmt.order_by(User.full_name)
     option_auditors = db.scalars(auditor_stmt).all()
     employee_stmt = select(Employee).where(Employee.is_active == True).order_by(Employee.full_name)
     if user.role == Role.leader:
