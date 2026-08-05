@@ -1,4 +1,4 @@
-// SLE frontend build v4.0 — Oracle optimized
+// SLE frontend build v5.0 — lazy loading and fast navigation
 const API=(window.SLE_CONFIG?.API_URL||'').replace(/\/$/,'');
 const app=document.getElementById('app');
 
@@ -68,6 +68,13 @@ function cacheTtl(path){
   return 0;
 }
 function clearRequestCache(){requestCache.clear();inflightGets.clear()}
+let pageRequestId=0;
+function beginPage(){return ++pageRequestId}
+function isCurrentPage(id){return id===pageRequestId}
+function loadingPage(active,title='Загрузка…'){
+  shell(`${mainNav(active)}<div class="card"><h1>${esc(title)}</h1><p class="muted">Данные загружаются, интерфейс остаётся доступным.</p></div>`);
+  bindNav();
+}
 
 function toast(msg){const t=$('#toast');t.textContent=msg;t.hidden=false;setTimeout(()=>t.hidden=true,3200)}
 function authHeaders(){return state.token?{'Authorization':`Bearer ${state.token}`}: {}}
@@ -143,5 +150,5 @@ function shell(content){
   app.innerHTML=`<div class="shell"><header class="topbar"><div class="brand"><i></i>SLE</div>${profile}</header><div class="container">${content}</div></div>`;
   $('#logout')?.addEventListener('click',logout);$('#themeToggle')?.addEventListener('click',toggleTheme);$('#changePassword')?.addEventListener('click',changePasswordPage);
 }
-function logout(){clearRequestCache();localStorage.removeItem('sle_token');localStorage.removeItem('sle_me');localStorage.removeItem('sle_regions');state.token='';state.me=null;state.regions=null;state.employees.clear();renderLogin()}
+function logout(){clearRequestCache();localStorage.removeItem('sle_token');localStorage.removeItem('sle_me');localStorage.removeItem('sle_regions');localStorage.removeItem('sle_admin_bootstrap');state.token='';state.me=null;state.regions=null;state.employees.clear();renderLogin()}
 function syncStatus(){$('#offline')?.toggleAttribute('hidden',navigator.onLine)}

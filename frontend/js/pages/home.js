@@ -9,10 +9,12 @@ function renderHome(){
   bindNav();$('#newAudit')?.addEventListener('click',newAuditForm);$$('[data-resume]').forEach(b=>b.onclick=()=>openAudit(b.dataset.resume));
 }
 async function home(){
+  const pageId=beginPage();
   if(!state.audits.length){try{state.audits=JSON.parse(localStorage.getItem('sle_audits_cache')||'[]')}catch{}}
   renderHome();
   try{
-    const fresh=await api('/audits?limit=30',{force:true});
+    const fresh=await api('/audits?limit=30');
+    if(!isCurrentPage(pageId))return;
     state.audits=fresh;
     localStorage.setItem('sle_audits_cache',JSON.stringify(fresh));
     const activeIds=new Set(fresh.filter(a=>['draft','in_progress'].includes(a.status)).map(a=>a.id));
@@ -49,12 +51,16 @@ function bindNav(){
   $$('[data-delete-audit]').forEach(b=>b.onclick=e=>{e.stopPropagation();deleteAudit(b.dataset.deleteAudit)});
 }
 
-async function logsPage(){
+async function logsPage(limit=50){
   if(!['admin','manager'].includes(state.me.role))return home();
+  const pageId=beginPage();
+  loadingPage('logs','Журнал действий');
   try{
-    const rows=await api('/extras/logs?limit=200',{force:true});
-    shell(`${mainNav('logs')}<div class="card"><h1>Журнал действий</h1><div class="table-wrap"><table class="table"><tr><th>Дата</th><th>Пользователь</th><th>Действие</th><th>Детали</th></tr>${rows.map(x=>`<tr><td>${esc(formatTashkentDateTime(x.created_at))}</td><td>${esc(x.user)}</td><td>${esc(x.action)}</td><td>${esc(x.details||'—')}</td></tr>`).join('')}</table></div></div>`);
+    const rows=await api(`/extras/logs?limit=${limit}`);
+    if(!isCurrentPage(pageId))return;
+    shell(`${mainNav('logs')}<div class="card"><div class="section-head"><div><h1>Журнал действий</h1><p class="muted">Показаны последние ${rows.length} записей</p></div>${rows.length>=limit&&limit<500?'<button class="btn secondary" id="loadMoreLogs">Показать ещё</button>':''}</div><div class="table-wrap"><table class="table"><tr><th>Дата</th><th>Пользователь</th><th>Действие</th><th>Детали</th></tr>${rows.map(x=>`<tr><td>${esc(formatTashkentDateTime(x.created_at))}</td><td>${esc(x.user)}</td><td>${esc(x.action)}</td><td>${esc(x.details||'—')}</td></tr>`).join('')}</table></div></div>`);
     bindNav();
+    $('#loadMoreLogs')?.addEventListener('click',()=>logsPage(Math.min(500,limit+50)));
   }catch(e){toast(e.message)}
 }
 

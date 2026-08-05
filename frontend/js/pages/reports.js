@@ -1,8 +1,15 @@
-async function history(){
-  try{state.audits=await api('/audits?limit=500')}catch(e){return toast(e.message)}
-  shell(`${mainNav('history')}<div class="card"><div class="section-head"><div><h1>Отчёты</h1><p class="muted">Все доступные аудиты</p></div></div><div class="actions"><button class="btn primary" id="exportExcel">Отчет по аудиту</button><button class="btn secondary" id="exportAnswers">Детальный отчет</button></div><div id="reportTable" class="top-gap">${auditTable(state.audits)}</div></div>`);
-  bindNav();$('#exportExcel').onclick=()=>downloadExcel('/extras/export/audit-report.xlsx','audit-report.xlsx');$('#exportAnswers').onclick=()=>downloadExcel('/extras/export/detailed-report.xlsx','detailed-audit-report.xlsx');
+async function history(limit=50){
+  const pageId=beginPage();
+  loadingPage('history','Отчёты');
+  try{state.audits=await api(`/audits?limit=${limit}`)}catch(e){return toast(e.message)}
+  if(!isCurrentPage(pageId))return;
+  shell(`${mainNav('history')}<div class="card"><div class="section-head"><div><h1>Отчёты</h1><p class="muted">Показаны последние ${state.audits.length} аудитов</p></div></div><div class="actions"><button class="btn primary" id="exportExcel">Отчет по аудиту</button><button class="btn secondary" id="exportAnswers">Детальный отчет</button>${state.audits.length>=limit&&limit<500?'<button class="btn secondary" id="loadMoreAudits">Показать ещё</button>':''}</div><div id="reportTable" class="top-gap">${auditTable(state.audits)}</div></div>`);
+  bindNav();
+  $('#exportExcel').onclick=()=>downloadExcel('/extras/export/audit-report.xlsx','audit-report.xlsx');
+  $('#exportAnswers').onclick=()=>downloadExcel('/extras/export/detailed-report.xlsx','detailed-audit-report.xlsx');
+  $('#loadMoreAudits')?.addEventListener('click',()=>history(Math.min(500,limit+50)));
 }
+
 function dashboardBlockName(name){
   return ({
     'Подготовка к визиту':'Подготовка',
@@ -20,8 +27,11 @@ function dashboardBlockName(name){
 }
 function statBar(label,value,count){return`<div class="stat-row"><div class="stat-label"><span>${esc(label)}</span><strong>${value}%</strong></div><div class="bar"><i style="width:${Math.max(0,Math.min(100,value))}%"></i></div><small>${count} ауд.</small></div>`}
 async function dashboard(filters={}){
+  const pageId=beginPage();
+  loadingPage('dashboard','Дашборд');
   const qs=new URLSearchParams(Object.entries(filters).filter(([,v])=>v));
   let d;try{d=await api('/audits/dashboard'+(qs.toString()?'?'+qs.toString():''))}catch(e){return toast(e.message)}
+  if(!isCurrentPage(pageId))return;
   const f=d.filters||{regions:[],auditors:[],employees:[],months:[],selected:{}};
   const sel=f.selected||{};
   const maxLevel=Math.max(1,...Object.values(d.levels));
