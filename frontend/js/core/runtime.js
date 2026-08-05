@@ -1,4 +1,4 @@
-// SLE frontend build v2.9
+// SLE frontend build v3.5.4 Oracle optimized
 const API=(window.SLE_CONFIG?.API_URL||'').replace(/\/$/,'');
 const app=document.getElementById('app');
 
@@ -70,12 +70,8 @@ function clearRequestCache(){requestCache.clear();inflightGets.clear()}
 
 function toast(msg){const t=$('#toast');t.textContent=msg;t.hidden=false;setTimeout(()=>t.hidden=true,3200)}
 function authHeaders(){return state.token?{'Authorization':`Bearer ${state.token}`}: {}}
-let wakeRequests=0;
-function setServerWake(show){
-  const el=document.getElementById('serverWake');
-  if(!el)return;
-  if(show){wakeRequests++;el.hidden=false}else{wakeRequests=Math.max(0,wakeRequests-1);if(!wakeRequests)el.hidden=true}
-}
+function setServerWake(){}
+
 function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
 async function api(path,opt={}){
   const method=(opt.method||'GET').toUpperCase();
@@ -88,11 +84,11 @@ async function api(path,opt={}){
   }
   const run=(async()=>{
     const retryable=method==='GET'||path==='/auth/login';
-    const attempts=retryable?4:1;
+    const attempts=retryable?2:1;
     let lastError;
     for(let attempt=0;attempt<attempts;attempt++){
       const controller=new AbortController();
-      const timeoutMs=opt.timeout||(attempt===0?12000:25000);
+      const timeoutMs=opt.timeout||12000;
       const timeout=setTimeout(()=>controller.abort(),timeoutMs);
       const headers={...authHeaders(),...(opt.headers||{})};
       if(opt.body!=null)headers['Content-Type']='application/json';
@@ -107,7 +103,7 @@ async function api(path,opt={}){
         }
         if(retryable&&[502,503,504].includes(res.status)&&attempt<attempts-1){
           lastError=new Error('Сервер запускается');
-          await sleep([800,1600,3000][attempt]||3000);
+          await sleep(350);
           continue;
         }
         let message=`Ошибка ${res.status}`;
@@ -119,7 +115,7 @@ async function api(path,opt={}){
       }catch(e){
         lastError=e.name==='AbortError'?new Error('Сервер запускается слишком долго'):e;
         if(!retryable||attempt===attempts-1)throw lastError;
-        await sleep([800,1600,3000][attempt]||3000);
+        await sleep(350);
       }finally{
         clearTimeout(timeout);
         if(attempt>0)setServerWake(false);
@@ -138,10 +134,8 @@ async function wakeServer(){
     clearTimeout(timer);
   }catch{}
 }
-function startKeepAlive(){
-  if(window.__sleKeepAlive)return;
-  window.__sleKeepAlive=setInterval(()=>{if(document.visibilityState==='visible'&&navigator.onLine)wakeServer()},9*60*1000);
-}
+function startKeepAlive(){}
+
 
 function esc(v=''){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function roleName(role){return role==='admin'?'Администратор':role==='manager'?'Менеджер':role==='auditor'?'Аудитор':'Руководитель'}
