@@ -168,7 +168,7 @@ def dashboard(
     and visits, which became increasingly expensive. This version uses compact
     aggregate queries and only loads full relationships for the ten recent audits.
     """
-    cache_key = f"dashboard:v60:{user.id}:{region_id or ''}:{auditor_id or ''}:{employee_id or ''}:{month or ''}:{int(include_options)}"
+    cache_key = f"dashboard:v61:{user.id}:{region_id or ''}:{auditor_id or ''}:{employee_id or ''}:{month or ''}:{int(include_options)}"
     cached = get_cache(cache_key)
     if cached is not None:
         return cached
@@ -337,7 +337,7 @@ def dashboard(
     options = None
     if include_options:
         # Filter options change infrequently, so cache them longer than dashboard metrics.
-        options_key = f"dashboard-options:v60:{user.id}:{region_id or ''}"
+        options_key = f"dashboard-options:v61:{user.id}:{region_id or ''}"
         options = get_cache(options_key)
         if options is None:
             region_stmt = select(Region).where(Region.is_active == True).order_by(Region.name)

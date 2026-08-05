@@ -44,7 +44,7 @@ function dashboardResults(d){
 
 function dashboardFilterBox(f){
   const sel=f.selected||{};
-  return `<div class="card dashboard-filters"><h2>Фильтры</h2><div class="grid four"><div class="field"><label>Регион</label><select id="dashRegion"><option value="">Все регионы</option>${f.regions.map(x=>`<option value="${x.id}" ${sel.region_id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="field"><label>Оценивающий</label><select id="dashAuditor"><option value="">Все</option>${f.auditors.map(x=>`<option value="${x.id}" data-role="${esc(x.role||'')}" data-regions="${esc((x.region_ids||[]).join(','))}" ${sel.auditor_id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="field"><label>Сотрудник</label><select id="dashEmployee"><option value="">Все сотрудники</option>${f.employees.map(x=>`<option value="${x.id}" data-region="${x.region_id}" ${sel.employee_id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="field"><label>Месяц</label><select id="dashMonth"><option value="">Все месяцы</option>${f.months.map(x=>`<option value="${x}" ${sel.month===x?'selected':''}>${x}</option>`).join('')}</select></div></div><div class="actions top-gap"><button class="btn primary" id="applyDashFilters">Применить</button><button class="btn secondary" id="resetDashFilters">Сбросить фильтры</button><span class="muted inline-loading" id="dashLoading" hidden>Обновление…</span><span class="muted">После выбора нажмите «Применить»</span></div></div>`;
+  return `<div class="card dashboard-filters"><h2>Фильтры</h2><div class="grid four"><div class="field"><label>Регион</label><select id="dashRegion"><option value="">Все регионы</option>${f.regions.map(x=>`<option value="${x.id}" ${sel.region_id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="field"><label>Оценивающий</label><select id="dashAuditor"><option value="">Все</option>${f.auditors.map(x=>`<option value="${x.id}" data-role="${esc(x.role||'')}" data-regions="${esc((x.region_ids||[]).join(','))}" ${sel.auditor_id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="field"><label>Сотрудник</label><select id="dashEmployee"><option value="">Все сотрудники</option>${f.employees.map(x=>`<option value="${x.id}" data-region="${x.region_id}" ${sel.employee_id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="field"><label>Месяц</label><select id="dashMonth"><option value="">Все месяцы</option>${f.months.map(x=>`<option value="${x}" ${sel.month===x?'selected':''}>${x}</option>`).join('')}</select></div></div><div class="actions top-gap"><button class="btn primary" id="applyDashFilters">Применить</button><button class="btn secondary" id="resetDashFilters">Сбросить фильтры</button><span class="muted inline-loading" id="dashLoading" hidden>Обновление…</span><span class="muted">Фильтр применяется автоматически; кнопка применяет сразу</span></div></div>`;
 }
 
 function filterDashboardDependentOptions(){
@@ -70,20 +70,28 @@ function currentDashboardFilters(){
     month:$('#dashMonth')?.value||''
   };
 }
+let dashboardFilterTimer=null;
+function scheduleDashboardApply(delay=450){
+  clearTimeout(dashboardFilterTimer);
+  dashboardFilterTimer=setTimeout(()=>dashboard(currentDashboardFilters(),{partial:true}),delay);
+}
 function bindDashboardFilters(){
   const region=$('#dashRegion'),auditor=$('#dashAuditor'),employee=$('#dashEmployee'),month=$('#dashMonth');
   if(!region||!auditor||!employee||!month)return;
   filterDashboardDependentOptions();
-  // Выбор только подготавливает фильтр. Запрос выполняется один раз по кнопке «Применить».
-  region.onchange=filterDashboardDependentOptions;
-  auditor.onchange=()=>{};
-  employee.onchange=()=>{};
-  month.onchange=()=>{};
-  $('#applyDashFilters').onclick=()=>dashboard(currentDashboardFilters(),{partial:true});
+  region.onchange=()=>{filterDashboardDependentOptions();scheduleDashboardApply()};
+  auditor.onchange=()=>scheduleDashboardApply();
+  employee.onchange=()=>scheduleDashboardApply();
+  month.onchange=()=>scheduleDashboardApply();
+  $('#applyDashFilters').onclick=()=>{
+    clearTimeout(dashboardFilterTimer);
+    dashboard(currentDashboardFilters(),{partial:true,force:true});
+  };
   $('#resetDashFilters').onclick=()=>{
+    clearTimeout(dashboardFilterTimer);
     region.value='';auditor.value='';employee.value='';month.value='';
     filterDashboardDependentOptions();
-    dashboard({}, {partial:true});
+    dashboard({}, {partial:true,force:true});
   };
 }
 
@@ -91,8 +99,17 @@ let dashboardAbortController=null;
 let dashboardSequence=0;
 
 async function dashboard(filters={},opts={}){
-  const partial=opts.partial&&!!$('#dashboardRoot');
+  let partial=opts.partial&&!!$('#dashboardRoot');
   const pageId=beginPage();
+  if(!partial&&!state.dashboardOptions){
+    try{state.dashboardOptions=JSON.parse(localStorage.getItem('sle_dashboard_options')||'null')}catch{}
+  }
+  if(!partial&&state.dashboardOptions){
+    let cached=null;try{cached=JSON.parse(localStorage.getItem('sle_dashboard_data')||'null')}catch{}
+    const placeholder=cached||{total:0,average:0,levels:{'Базовый':0,'Уверенный':0,'Мастер':0},regions:[],employees:[],months:[],recent:[],blocks:[]};
+    shell(`${mainNav('dashboard')}<div id="dashboardRoot"><div class="dashboard-head"><div><h1>Дашборд</h1><p class="muted">Статистика по завершённым аудитам</p></div></div>${dashboardFilterBox({...state.dashboardOptions,selected:filters})}<div id="dashboardResults" class="section-loading">${dashboardResults(placeholder)}</div></div>`);
+    bindNav();bindDashboardFilters();partial=true;
+  }
   const sequence=++dashboardSequence;
   dashboardAbortController?.abort();
   dashboardAbortController=new AbortController();
@@ -104,9 +121,9 @@ async function dashboard(filters={},opts={}){
     if($('#applyDashFilters'))$('#applyDashFilters').disabled=true;
   }
   const qs=new URLSearchParams(Object.entries(filters).filter(([,v])=>v));
-  qs.set('include_options', partial?'false':'true');
+  qs.set('include_options', state.dashboardOptions?'false':'true');
   let d;
-  try{d=await api('/audits/dashboard'+(qs.toString()?'?'+qs.toString():''),{signal:dashboardAbortController.signal})}
+  try{d=await api('/audits/dashboard'+(qs.toString()?'?'+qs.toString():''),{signal:dashboardAbortController.signal,force:!!opts.force})}
   catch(e){
     if(e?.name==='AbortError'||sequence!==dashboardSequence)return;
     $('#dashboardResults')?.classList.remove('section-loading');$('#dashLoading')?.setAttribute('hidden','');
@@ -115,8 +132,8 @@ async function dashboard(filters={},opts={}){
     return toast(e.message);
   }
   if(!isCurrentPage(pageId)||sequence!==dashboardSequence)return;
-  if(d.filters)state.dashboardOptions=d.filters;
-  state.dashboardData=d;
+  if(d.filters){state.dashboardOptions=d.filters;localStorage.setItem('sle_dashboard_options',JSON.stringify(d.filters));}
+  state.dashboardData=d;localStorage.setItem('sle_dashboard_data',JSON.stringify(d));
   const f=d.filters||state.dashboardOptions||{regions:[],auditors:[],employees:[],months:[],selected:{}};
   if(!partial){
     shell(`${mainNav('dashboard')}<div id="dashboardRoot"><div class="dashboard-head"><div><h1>Дашборд</h1><p class="muted">Статистика по завершённым аудитам</p></div></div>${dashboardFilterBox(f)}<div id="dashboardResults">${dashboardResults(d)}</div></div>`);

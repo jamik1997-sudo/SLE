@@ -3,14 +3,19 @@ async function adminPage(){
   let regions=[],users=[],employees=[];
   try{
     const cached=localStorage.getItem('sle_admin_bootstrap');
+    let cachedAt=0;
     if(cached){
-      const data=JSON.parse(cached);
+      const parsed=JSON.parse(cached);
+      const data=parsed.data||parsed;
+      cachedAt=parsed.ts||0;
       regions=data.regions||[];users=data.users||[];employees=data.employees||[];
     }else loadingPage('admin','Управление');
-    const data=await api('/admin/bootstrap');
-    if(!isCurrentPage(pageId))return;
-    regions=data.regions||[];users=data.users||[];employees=data.employees||[];
-    localStorage.setItem('sle_admin_bootstrap',JSON.stringify(data));
+    if(!cachedAt||Date.now()-cachedAt>5*60*1000){
+      const data=await api('/admin/bootstrap');
+      if(!isCurrentPage(pageId))return;
+      regions=data.regions||[];users=data.users||[];employees=data.employees||[];
+      localStorage.setItem('sle_admin_bootstrap',JSON.stringify({ts:Date.now(),data}));
+    }
   }catch(e){if(!regions.length)return toast(e.message)}
   const leaders=users.filter(x=>x.role==='leader');
   const leaderOptions=(selected='')=>leaders.map(x=>`<option value="${x.id}" ${selected===x.id?'selected':''}>${esc(x.full_name)} (${esc(x.regions?.[0]?.name||'без региона')})</option>`).join('');

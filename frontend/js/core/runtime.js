@@ -1,4 +1,4 @@
-// SLE frontend build v6.0 — staged loading, deduplicated requests and stable navigation
+// SLE frontend build v6.1 — staged loading, deduplicated requests and stable navigation
 const API=(window.SLE_CONFIG?.API_URL||'').replace(/\/$/,'');
 const app=document.getElementById('app');
 
@@ -61,10 +61,10 @@ const requestCache=new Map();
 const inflightGets=new Map();
 function cacheTtl(path){
   if(path==='/auth/me')return 10*60*1000;
-  if(path==='/admin/bootstrap')return 60*1000;
+  if(path==='/admin/bootstrap')return 5*60*1000;
   if(path==='/audits/questionnaire'||path==='/audits/regions')return 5*60*1000;
   if(path.startsWith('/audits/employees'))return 2*60*1000;
-  if(path.startsWith('/audits/dashboard'))return 60*1000;
+  if(path.startsWith('/audits/dashboard'))return 30*1000;
   if(path.startsWith('/audits?'))return 30*1000;
   if(path.startsWith('/extras/logs'))return 30*1000;
   return 0;
@@ -161,5 +161,5 @@ function shell(content){
   app.innerHTML=`<div class="shell"><header class="topbar"><div class="brand"><i></i>SLE</div>${profile}</header><div class="container">${content}</div></div>`;
   $('#logout')?.addEventListener('click',logout);$('#themeToggle')?.addEventListener('click',toggleTheme);$('#changePassword')?.addEventListener('click',changePasswordPage);
 }
-function logout(){clearRequestCache();state.pageData.clear();state.dashboardOptions=null;state.dashboardData=null;localStorage.removeItem('sle_token');localStorage.removeItem('sle_me');localStorage.removeItem('sle_regions');localStorage.removeItem('sle_admin_bootstrap');state.token='';state.me=null;state.regions=null;state.employees.clear();renderLogin()}
+function logout(){clearRequestCache();state.pageData.clear();state.dashboardOptions=null;state.dashboardData=null;localStorage.removeItem('sle_token');localStorage.removeItem('sle_me');localStorage.removeItem('sle_regions');localStorage.removeItem('sle_admin_bootstrap');localStorage.removeItem('sle_dashboard_options');localStorage.removeItem('sle_dashboard_data');state.token='';state.me=null;state.regions=null;state.employees.clear();renderLogin()}
 function syncStatus(){$('#offline')?.toggleAttribute('hidden',navigator.onLine)}
