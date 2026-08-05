@@ -1,4 +1,4 @@
-// SLE frontend build v5.2 — request cancellation, stable pages and fast navigation
+// SLE frontend build v6.0 — staged loading, deduplicated requests and stable navigation
 const API=(window.SLE_CONFIG?.API_URL||'').replace(/\/$/,'');
 const app=document.getElementById('app');
 
@@ -52,7 +52,8 @@ const state={
   theme:localStorage.getItem('sle_theme')||'light',
   me:null,audits:[],questions:JSON.parse(localStorage.getItem('sle_questions')||'[]'),
   audit:null,visit:0,step:0,regions:null,employees:new Map(),
-  pendingAnswers:new Map(),pendingVisit:{},syncTimer:null,syncing:null
+  pendingAnswers:new Map(),pendingVisit:{},syncTimer:null,syncing:null,
+  dashboardOptions:null,dashboardData:null,pageData:new Map()
 };
 const $=(s,r=document)=>r.querySelector(s);
 const $$=(s,r=document)=>[...r.querySelectorAll(s)];
@@ -63,8 +64,9 @@ function cacheTtl(path){
   if(path==='/admin/bootstrap')return 60*1000;
   if(path==='/audits/questionnaire'||path==='/audits/regions')return 5*60*1000;
   if(path.startsWith('/audits/employees'))return 2*60*1000;
-  if(path.startsWith('/audits/dashboard'))return 30*1000;
-  if(path.startsWith('/audits?'))return 15*1000;
+  if(path.startsWith('/audits/dashboard'))return 60*1000;
+  if(path.startsWith('/audits?'))return 30*1000;
+  if(path.startsWith('/extras/logs'))return 30*1000;
   return 0;
 }
 function clearRequestCache(){requestCache.clear();inflightGets.clear()}
@@ -159,5 +161,5 @@ function shell(content){
   app.innerHTML=`<div class="shell"><header class="topbar"><div class="brand"><i></i>SLE</div>${profile}</header><div class="container">${content}</div></div>`;
   $('#logout')?.addEventListener('click',logout);$('#themeToggle')?.addEventListener('click',toggleTheme);$('#changePassword')?.addEventListener('click',changePasswordPage);
 }
-function logout(){clearRequestCache();localStorage.removeItem('sle_token');localStorage.removeItem('sle_me');localStorage.removeItem('sle_regions');localStorage.removeItem('sle_admin_bootstrap');state.token='';state.me=null;state.regions=null;state.employees.clear();renderLogin()}
+function logout(){clearRequestCache();state.pageData.clear();state.dashboardOptions=null;state.dashboardData=null;localStorage.removeItem('sle_token');localStorage.removeItem('sle_me');localStorage.removeItem('sle_regions');localStorage.removeItem('sle_admin_bootstrap');state.token='';state.me=null;state.regions=null;state.employees.clear();renderLogin()}
 function syncStatus(){$('#offline')?.toggleAttribute('hidden',navigator.onLine)}

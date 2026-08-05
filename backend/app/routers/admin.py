@@ -39,7 +39,7 @@ def _serialize_users(rows, actor: User):
 @router.get("/bootstrap")
 def bootstrap(db: Session = Depends(get_db), actor: User = Depends(require_roles(Role.admin, Role.manager))):
     """One round-trip for the management page instead of three parallel requests."""
-    cache_key = f"admin-bootstrap:v41:{actor.role.value}"
+    cache_key = f"admin-bootstrap:v60:{actor.role.value}"
     cached = get_cache(cache_key)
     if cached is not None:
         return cached

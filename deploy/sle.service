@@ -12,7 +12,7 @@ ExecStart=/home/ubuntu/SLE/backend/venv/bin/uvicorn app.main:app --host 127.0.0.
 Restart=always
 RestartSec=3
 TimeoutStopSec=20
-MemoryMax=700M
+KillSignal=SIGINT
 
 [Install]
 WantedBy=multi-user.target

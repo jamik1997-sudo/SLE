@@ -1,4 +1,4 @@
-const CACHE_VERSION = "sle-audit-v5.3.0";
+const CACHE_VERSION = "sle-audit-v6.0.0";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const APP_SHELL = [
   '/', '/index.html', '/styles.v30.css', '/config.js', '/manifest.webmanifest',

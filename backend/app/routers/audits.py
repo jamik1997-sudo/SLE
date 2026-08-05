@@ -153,14 +153,22 @@ def delete_audit(audit_id: str, db: Session = Depends(get_db), user: User = Depe
 
 
 @router.get("/dashboard")
-def dashboard(region_id: str | None = None, auditor_id: str | None = None, employee_id: str | None = None, month: str | None = None, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def dashboard(
+    region_id: str | None = None,
+    auditor_id: str | None = None,
+    employee_id: str | None = None,
+    month: str | None = None,
+    include_options: bool = True,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
     """Optimized dashboard.
 
     The old implementation loaded every completed audit together with all answers
     and visits, which became increasingly expensive. This version uses compact
     aggregate queries and only loads full relationships for the ten recent audits.
     """
-    cache_key = f"dashboard:v41:{user.id}:{region_id or ''}:{auditor_id or ''}:{employee_id or ''}:{month or ''}"
+    cache_key = f"dashboard:v60:{user.id}:{region_id or ''}:{auditor_id or ''}:{employee_id or ''}:{month or ''}:{int(include_options)}"
     cached = get_cache(cache_key)
     if cached is not None:
         return cached
@@ -326,71 +334,74 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
                 "location_url": f"https://maps.google.com/?q={visit.latitude},{visit.longitude}" if visit.latitude is not None and visit.longitude is not None else None,
             })
 
-    # Filter options change infrequently, so cache them longer than dashboard metrics.
-    options_key = f"dashboard-options:v41:{user.id}:{region_id or ''}"
-    options = get_cache(options_key)
-    if options is None:
-        region_stmt = select(Region).where(Region.is_active == True).order_by(Region.name)
-        if user.role == Role.leader:
-            region_stmt = region_stmt.where(Region.id.in_(allowed_regions(user)))
-        option_regions = db.scalars(region_stmt).all()
+    options = None
+    if include_options:
+        # Filter options change infrequently, so cache them longer than dashboard metrics.
+        options_key = f"dashboard-options:v60:{user.id}:{region_id or ''}"
+        options = get_cache(options_key)
+        if options is None:
+            region_stmt = select(Region).where(Region.is_active == True).order_by(Region.name)
+            if user.role == Role.leader:
+                region_stmt = region_stmt.where(Region.id.in_(allowed_regions(user)))
+            option_regions = db.scalars(region_stmt).all()
 
-        if user.role == Role.leader:
-            auditor_stmt = (
-                select(User)
-                .options(selectinload(User.regions))
-                .where(User.id == user.id, User.is_active == True)
-            )
-        else:
-            # Оценивающие: менеджеры и аудиторы доступны во всех регионах,
-            # руководители — только в закреплённых за ними регионах.
-            auditor_stmt = (
-                select(User)
-                .options(selectinload(User.regions))
-                .where(User.is_active == True, User.role.in_([Role.leader, Role.auditor, Role.manager]))
-                .order_by(User.full_name)
-            )
-            if region_id:
-                leader_ids = select(UserRegion.user_id).where(UserRegion.region_id == region_id)
-                auditor_stmt = auditor_stmt.where(
-                    or_(User.role.in_([Role.auditor, Role.manager]), User.id.in_(leader_ids))
+            if user.role == Role.leader:
+                auditor_stmt = (
+                    select(User)
+                    .options(selectinload(User.regions))
+                    .where(User.id == user.id, User.is_active == True)
                 )
-        option_auditors = db.scalars(auditor_stmt).unique().all()
+            else:
+                # Оценивающие: менеджеры и аудиторы доступны во всех регионах,
+                # руководители — только в закреплённых за ними регионах.
+                auditor_stmt = (
+                    select(User)
+                    .options(selectinload(User.regions))
+                    .where(User.is_active == True, User.role.in_([Role.leader, Role.auditor, Role.manager]))
+                    .order_by(User.full_name)
+                )
+                if region_id:
+                    leader_ids = select(UserRegion.user_id).where(UserRegion.region_id == region_id)
+                    auditor_stmt = auditor_stmt.where(
+                        or_(User.role.in_([Role.auditor, Role.manager]), User.id.in_(leader_ids))
+                    )
+            option_auditors = db.scalars(auditor_stmt).unique().all()
 
-        employee_stmt = select(Employee).where(Employee.is_active == True).order_by(Employee.full_name)
-        if user.role == Role.leader:
-            employee_stmt = employee_stmt.where(Employee.region_id.in_(allowed_regions(user)))
-        if region_id:
-            employee_stmt = employee_stmt.where(Employee.region_id == region_id)
-        option_employees = db.scalars(employee_stmt).all()
+            employee_stmt = select(Employee).where(Employee.is_active == True).order_by(Employee.full_name)
+            if user.role == Role.leader:
+                employee_stmt = employee_stmt.where(Employee.region_id.in_(allowed_regions(user)))
+            if region_id:
+                employee_stmt = employee_stmt.where(Employee.region_id == region_id)
+            option_employees = db.scalars(employee_stmt).all()
 
-        month_stmt = select(
-            func.extract('year', Audit.audit_date).label('year'),
-            func.extract('month', Audit.audit_date).label('month'),
-        ).where(base_condition).group_by('year', 'month').order_by(text('year DESC'), text('month DESC'))
-        if user.role == Role.leader:
-            month_stmt = month_stmt.where(Audit.region_id.in_(allowed_regions(user)))
-        month_options = [f"{int(row.year):04d}-{int(row.month):02d}" for row in db.execute(month_stmt).all()]
-        options = set_cache(options_key, {
-            "regions": [{"id": x.id, "name": x.name} for x in option_regions],
-            "auditors": [{
-                "id": x.id,
-                "name": x.full_name,
-                "role": x.role.value,
-                "region_ids": [link.region_id for link in x.regions] if x.role == Role.leader else [],
-            } for x in option_auditors],
-            "employees": [{"id": x.id, "name": x.full_name, "region_id": x.region_id} for x in option_employees],
-            "months": month_options,
-        }, ttl=300)
+            month_stmt = select(
+                func.extract('year', Audit.audit_date).label('year'),
+                func.extract('month', Audit.audit_date).label('month'),
+            ).where(base_condition).group_by('year', 'month').order_by(text('year DESC'), text('month DESC'))
+            if user.role == Role.leader:
+                month_stmt = month_stmt.where(Audit.region_id.in_(allowed_regions(user)))
+            month_options = [f"{int(row.year):04d}-{int(row.month):02d}" for row in db.execute(month_stmt).all()]
+            options = set_cache(options_key, {
+                "regions": [{"id": x.id, "name": x.name} for x in option_regions],
+                "auditors": [{
+                    "id": x.id,
+                    "name": x.full_name,
+                    "role": x.role.value,
+                    "region_ids": [link.region_id for link in x.regions] if x.role == Role.leader else [],
+                } for x in option_auditors],
+                "employees": [{"id": x.id, "name": x.full_name, "region_id": x.region_id} for x in option_employees],
+                "months": month_options,
+            }, ttl=300)
 
     result = {
         "total": total, "average": average, "levels": levels, "regions": regions,
         "employees": employees, "months": months, "recent": recent, "blocks": blocks,
-        "filters": {
+    }
+    if include_options and options is not None:
+        result["filters"] = {
             **options,
             "selected": {"region_id": region_id, "auditor_id": auditor_id, "employee_id": employee_id, "month": month},
-        },
-    }
+        }
     return set_cache(cache_key, result, ttl=60)
 
 
