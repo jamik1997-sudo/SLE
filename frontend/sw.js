@@ -1,4 +1,4 @@
-const CACHE_VERSION = "sle-audit-v3.5.2";
+const CACHE_VERSION = "sle-audit-v3.5.3";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const APP_SHELL = [
   '/',
@@ -41,7 +41,7 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
 
   // API and external resources are never cached by the PWA.
-  if (url.origin !== self.location.origin || url.hostname.includes('onrender.com')) return;
+  if (url.origin !== self.location.origin) return;
 
   const isFreshAppFile =
     request.mode === 'navigate' ||
