@@ -2,7 +2,7 @@ from datetime import datetime, date
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, delete, text, or_, func, case, distinct
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, selectinload, joinedload
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from app.database import get_db
 from app.models import Answer, Audit, AuditStatus, Employee, Region, Role, User, UserRegion, Visit, VisitTiming, QuestionSetting, ScoreSetting, ActivityLog
@@ -108,7 +108,10 @@ def employees(region_id: str | None = None, db: Session = Depends(get_db), user:
 @router.get("")
 def list_audits(limit: int = 100, db: Session = Depends(get_db), user: User = Depends(current_user)):
     purge_stale_drafts(db)
-    stmt = select(Audit).options(selectinload(Audit.employee), selectinload(Audit.region), selectinload(Audit.auditor), selectinload(Audit.leader)).where(Audit.status != AuditStatus.cancelled).order_by(Audit.last_saved_at.desc())
+    stmt = select(Audit).options(
+        joinedload(Audit.employee), joinedload(Audit.region),
+        joinedload(Audit.auditor), joinedload(Audit.leader)
+    ).where(Audit.status != AuditStatus.cancelled).order_by(Audit.last_saved_at.desc())
     if user.role == Role.leader:
         stmt = stmt.where(Audit.region_id.in_(allowed_regions(user)))
     rows = db.scalars(stmt.limit(min(max(limit, 1), 500))).all()
@@ -333,14 +336,26 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
         option_regions = db.scalars(region_stmt).all()
 
         if user.role == Role.leader:
-            auditor_stmt = select(User).where(User.id == user.id, User.is_active == True)
+            auditor_stmt = (
+                select(User)
+                .options(selectinload(User.regions))
+                .where(User.id == user.id, User.is_active == True)
+            )
         else:
-            auditor_stmt = select(User).where(User.is_active == True, User.role.in_([Role.leader, Role.auditor, Role.manager]))
+            # Оценивающие: менеджеры и аудиторы доступны во всех регионах,
+            # руководители — только в закреплённых за ними регионах.
+            auditor_stmt = (
+                select(User)
+                .options(selectinload(User.regions))
+                .where(User.is_active == True, User.role.in_([Role.leader, Role.auditor, Role.manager]))
+                .order_by(User.full_name)
+            )
             if region_id:
                 leader_ids = select(UserRegion.user_id).where(UserRegion.region_id == region_id)
-                auditor_stmt = auditor_stmt.where(or_(User.role.in_([Role.auditor, Role.manager]), User.id.in_(leader_ids)))
-            auditor_stmt = auditor_stmt.order_by(User.full_name)
-        option_auditors = db.scalars(auditor_stmt).all()
+                auditor_stmt = auditor_stmt.where(
+                    or_(User.role.in_([Role.auditor, Role.manager]), User.id.in_(leader_ids))
+                )
+        option_auditors = db.scalars(auditor_stmt).unique().all()
 
         employee_stmt = select(Employee).where(Employee.is_active == True).order_by(Employee.full_name)
         if user.role == Role.leader:
@@ -358,7 +373,12 @@ def dashboard(region_id: str | None = None, auditor_id: str | None = None, emplo
         month_options = [f"{int(row.year):04d}-{int(row.month):02d}" for row in db.execute(month_stmt).all()]
         options = set_cache(options_key, {
             "regions": [{"id": x.id, "name": x.name} for x in option_regions],
-            "auditors": [{"id": x.id, "name": x.full_name} for x in option_auditors],
+            "auditors": [{
+                "id": x.id,
+                "name": x.full_name,
+                "role": x.role.value,
+                "region_ids": [link.region_id for link in x.regions] if x.role == Role.leader else [],
+            } for x in option_auditors],
             "employees": [{"id": x.id, "name": x.full_name, "region_id": x.region_id} for x in option_employees],
             "months": month_options,
         }, ttl=300)

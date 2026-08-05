@@ -27,9 +27,9 @@ async function boot(){
   try{
     const cachedMe=localStorage.getItem('sle_me');
     if(cachedMe){try{state.me=JSON.parse(cachedMe)}catch{}}
-    if(state.me)await home();
+    if(state.me)home();
     state.me=await api('/auth/me');localStorage.setItem('sle_me',JSON.stringify(state.me));
-    if(!document.querySelector('.shell'))await home();
+    if(!document.querySelector('.shell'))home();
   }catch{logout()}
 }
 function renderLogin(){

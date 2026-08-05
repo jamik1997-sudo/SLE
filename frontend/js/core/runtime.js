@@ -1,4 +1,4 @@
-// SLE frontend build v5.0 — lazy loading and fast navigation
+// SLE frontend build v5.2 — request cancellation, stable pages and fast navigation
 const API=(window.SLE_CONFIG?.API_URL||'').replace(/\/$/,'');
 const app=document.getElementById('app');
 
@@ -100,13 +100,20 @@ async function api(path,opt={}){
     let lastError;
     for(let attempt=0;attempt<attempts;attempt++){
       const controller=new AbortController();
+      const externalSignal=opt.signal;
+      const abortFromExternal=()=>controller.abort(externalSignal?.reason);
+      if(externalSignal){
+        if(externalSignal.aborted)controller.abort(externalSignal.reason);
+        else externalSignal.addEventListener('abort',abortFromExternal,{once:true});
+      }
       const timeoutMs=opt.timeout||(attempt===0?8000:12000);
       const timeout=setTimeout(()=>controller.abort(),timeoutMs);
       const headers={...authHeaders(),...(opt.headers||{})};
       if(opt.body!=null)headers['Content-Type']='application/json';
       try{
         if(attempt>0)setServerWake(true);
-        const res=await fetch(API+path,{...opt,headers,signal:controller.signal,cache:'no-store'});
+        const {signal: _ignoredSignal,...fetchOptions}=opt;
+        const res=await fetch(API+path,{...fetchOptions,headers,signal:controller.signal,cache:'no-store'});
         let data={};try{data=await res.json()}catch{}
         if(res.ok){
           if(ttl)requestCache.set(cacheKey,{ts:Date.now(),data});
@@ -125,11 +132,13 @@ async function api(path,opt={}){
         else if(data.message)message=data.message;
         console.error('API error',path,data);throw new Error(message);
       }catch(e){
-        lastError=e.name==='AbortError'?new Error('Сервер запускается слишком долго'):e;
+        if(externalSignal?.aborted)throw e;
+        lastError=e.name==='AbortError'?new Error('Сервер отвечает слишком долго'):e;
         if(!retryable||attempt===attempts-1)throw lastError;
         await sleep(500);
       }finally{
         clearTimeout(timeout);
+        if(externalSignal)externalSignal.removeEventListener('abort',abortFromExternal);
         if(attempt>0)setServerWake(false);
       }
     }
