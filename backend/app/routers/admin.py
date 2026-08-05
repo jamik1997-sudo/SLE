@@ -17,19 +17,12 @@ def _ensure_can_manage(actor: User, target: User):
         raise HTTPException(400, "Нельзя удалить собственную учетную запись")
 
 
-@router.get("/users")
-def users(db: Session = Depends(get_db), actor: User = Depends(require_roles(Role.admin, Role.manager))):
-    rows = db.scalars(select(User).options(selectinload(User.regions).selectinload(UserRegion.region)).where(User.is_active == True).order_by(User.full_name)).all()
+def _serialize_users(rows, actor: User):
     result = []
     for u in rows:
-        # Administrators can view every stored display password. Managers can
-        # view passwords of non-administrator accounts only.
         can_view_password = actor.role == Role.admin or (actor.role == Role.manager and u.role != Role.admin)
         result.append({
-            "id": u.id,
-            "full_name": u.full_name,
-            "login": u.login,
-            "role": u.role.value,
+            "id": u.id, "full_name": u.full_name, "login": u.login, "role": u.role.value,
             "is_active": u.is_active,
             "regions": [{"id": x.region.id, "name": x.region.name} for x in u.regions],
             "device_bound": bool(u.device_id) if u.role == Role.leader else False,
@@ -40,6 +33,38 @@ def users(db: Session = Depends(get_db), actor: User = Depends(require_roles(Rol
             "password_visible": u.password_visible if can_view_password else None,
         })
     return result
+
+
+@router.get("/bootstrap")
+def bootstrap(db: Session = Depends(get_db), actor: User = Depends(require_roles(Role.admin, Role.manager))):
+    """One round-trip for the management page instead of three parallel requests."""
+    user_rows = db.scalars(
+        select(User).options(selectinload(User.regions).selectinload(UserRegion.region))
+        .where(User.is_active == True).order_by(User.full_name)
+    ).all()
+    region_rows = db.scalars(
+        select(Region).where(Region.is_active == True).order_by(Region.name)
+    ).all()
+    employee_rows = db.scalars(
+        select(Employee).options(selectinload(Employee.region), selectinload(Employee.leader))
+        .where(Employee.is_active == True).join(Employee.region)
+        .order_by(Region.name, Employee.full_name)
+    ).all()
+    return {
+        "users": _serialize_users(user_rows, actor),
+        "regions": [{"id": r.id, "name": r.name} for r in region_rows],
+        "employees": [{
+            "id": x.id, "full_name": x.full_name, "position": x.position,
+            "region_id": x.region_id, "region_name": x.region.name,
+            "leader_id": x.leader_id, "leader_name": x.leader.full_name if x.leader else None,
+        } for x in employee_rows],
+    }
+
+
+@router.get("/users")
+def users(db: Session = Depends(get_db), actor: User = Depends(require_roles(Role.admin, Role.manager))):
+    rows = db.scalars(select(User).options(selectinload(User.regions).selectinload(UserRegion.region)).where(User.is_active == True).order_by(User.full_name)).all()
+    return _serialize_users(rows, actor)
 
 
 @router.post("/users")

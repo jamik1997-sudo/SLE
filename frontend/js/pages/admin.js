@@ -1,5 +1,9 @@
 async function adminPage(){
-  let regions=[],users=[],employees=[];try{[regions,users,employees]=await Promise.all([api('/admin/regions'),api('/admin/users'),api('/admin/employees')])}catch(e){return toast(e.message)}
+  let regions=[],users=[],employees=[];
+  try{
+    const data=await api('/admin/bootstrap',{force:true});
+    regions=data.regions||[];users=data.users||[];employees=data.employees||[];
+  }catch(e){return toast(e.message)}
   const leaders=users.filter(x=>x.role==='leader');
   const leaderOptions=(selected='')=>leaders.map(x=>`<option value="${x.id}" ${selected===x.id?'selected':''}>${esc(x.full_name)} (${esc(x.regions?.[0]?.name||'без региона')})</option>`).join('');
   shell(`${mainNav('admin')}<div class="grid two"><div class="card"><h2>Добавить регион</h2><form id="addRegion"><div class="field"><label>Название</label><input name="name" required></div><button class="btn primary top-gap">Добавить</button></form></div><div class="card"><h2>Добавить сотрудника</h2><form id="addEmployee"><div class="field"><label>ФИО</label><input name="full_name" required></div><div class="field"><label>Регион</label><select name="region_id" required>${regions.map(r=>`<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select></div><div class="field"><label>Руководитель</label><select name="leader_id" required><option value="">Выберите руководителя</option>${leaderOptions()}</select></div><div class="field"><label>Должность</label><input name="position"></div><button class="btn primary top-gap">Добавить</button></form></div></div>

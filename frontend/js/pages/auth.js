@@ -1,5 +1,5 @@
 async function boot(){
-  applyTheme();wakeServer();startKeepAlive();state.regions=null
+  applyTheme();state.regions=null
   window.addEventListener('online',syncStatus);window.addEventListener('offline',syncStatus);syncStatus();
   if('serviceWorker' in navigator){
     try{

@@ -1,4 +1,4 @@
-// SLE frontend build v3.5.4 Oracle optimized
+// SLE frontend build v4.0 — Oracle optimized
 const API=(window.SLE_CONFIG?.API_URL||'').replace(/\/$/,'');
 const app=document.getElementById('app');
 
@@ -59,7 +59,8 @@ const $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const requestCache=new Map();
 const inflightGets=new Map();
 function cacheTtl(path){
-  if(path==='/auth/me')return 5*60*1000;
+  if(path==='/auth/me')return 10*60*1000;
+  if(path==='/admin/bootstrap')return 60*1000;
   if(path==='/audits/questionnaire'||path==='/audits/regions')return 5*60*1000;
   if(path.startsWith('/audits/employees'))return 2*60*1000;
   if(path.startsWith('/audits/dashboard'))return 30*1000;
@@ -70,8 +71,12 @@ function clearRequestCache(){requestCache.clear();inflightGets.clear()}
 
 function toast(msg){const t=$('#toast');t.textContent=msg;t.hidden=false;setTimeout(()=>t.hidden=true,3200)}
 function authHeaders(){return state.token?{'Authorization':`Bearer ${state.token}`}: {}}
-function setServerWake(){}
-
+let wakeRequests=0;
+function setServerWake(show){
+  const el=document.getElementById('serverWake');
+  if(!el)return;
+  if(show){wakeRequests++;el.hidden=false}else{wakeRequests=Math.max(0,wakeRequests-1);if(!wakeRequests)el.hidden=true}
+}
 function sleep(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
 async function api(path,opt={}){
   const method=(opt.method||'GET').toUpperCase();
@@ -88,7 +93,7 @@ async function api(path,opt={}){
     let lastError;
     for(let attempt=0;attempt<attempts;attempt++){
       const controller=new AbortController();
-      const timeoutMs=opt.timeout||12000;
+      const timeoutMs=opt.timeout||(attempt===0?8000:12000);
       const timeout=setTimeout(()=>controller.abort(),timeoutMs);
       const headers={...authHeaders(),...(opt.headers||{})};
       if(opt.body!=null)headers['Content-Type']='application/json';
@@ -103,7 +108,7 @@ async function api(path,opt={}){
         }
         if(retryable&&[502,503,504].includes(res.status)&&attempt<attempts-1){
           lastError=new Error('Сервер запускается');
-          await sleep(350);
+          await sleep(500);
           continue;
         }
         let message=`Ошибка ${res.status}`;
@@ -115,7 +120,7 @@ async function api(path,opt={}){
       }catch(e){
         lastError=e.name==='AbortError'?new Error('Сервер запускается слишком долго'):e;
         if(!retryable||attempt===attempts-1)throw lastError;
-        await sleep(350);
+        await sleep(500);
       }finally{
         clearTimeout(timeout);
         if(attempt>0)setServerWake(false);
@@ -126,16 +131,8 @@ async function api(path,opt={}){
   if(ttl)inflightGets.set(cacheKey,run);
   try{return await run}finally{if(ttl)inflightGets.delete(cacheKey)}
 }
-async function wakeServer(){
-  try{
-    const controller=new AbortController();
-    const timer=setTimeout(()=>controller.abort(),7000);
-    await fetch(API+'/health',{signal:controller.signal,cache:'no-store'});
-    clearTimeout(timer);
-  }catch{}
-}
+async function wakeServer(){ return true }
 function startKeepAlive(){}
-
 
 function esc(v=''){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function roleName(role){return role==='admin'?'Администратор':role==='manager'?'Менеджер':role==='auditor'?'Аудитор':'Руководитель'}
