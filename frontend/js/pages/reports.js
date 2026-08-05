@@ -44,7 +44,7 @@ function dashboardResults(d){
 
 function dashboardFilterBox(f){
   const sel=f.selected||{};
-  return `<div class="card dashboard-filters"><h2>Фильтры</h2><div class="grid four"><div class="field"><label>Регион</label><select id="dashRegion"><option value="">Все регионы</option>${f.regions.map(x=>`<option value="${x.id}" ${sel.region_id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="field"><label>Оценивающий</label><select id="dashAuditor"><option value="">Все</option>${f.auditors.map(x=>`<option value="${x.id}" data-role="${esc(x.role||'')}" data-regions="${esc((x.region_ids||[]).join(','))}" ${sel.auditor_id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="field"><label>Сотрудник</label><select id="dashEmployee"><option value="">Все сотрудники</option>${f.employees.map(x=>`<option value="${x.id}" data-region="${x.region_id}" ${sel.employee_id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="field"><label>Месяц</label><select id="dashMonth"><option value="">Все месяцы</option>${f.months.map(x=>`<option value="${x}" ${sel.month===x?'selected':''}>${x}</option>`).join('')}</select></div></div><div class="actions top-gap"><button class="btn primary" id="applyDashFilters">Применить</button><button class="btn secondary" id="resetDashFilters">Сбросить</button><span class="muted inline-loading" id="dashLoading" hidden>Обновление…</span></div></div>`;
+  return `<div class="card dashboard-filters"><h2>Фильтры</h2><div class="grid four"><div class="field"><label>Регион</label><select id="dashRegion"><option value="">Все регионы</option>${f.regions.map(x=>`<option value="${x.id}" ${sel.region_id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="field"><label>Оценивающий</label><select id="dashAuditor"><option value="">Все</option>${f.auditors.map(x=>`<option value="${x.id}" data-role="${esc(x.role||'')}" data-regions="${esc((x.region_ids||[]).join(','))}" ${sel.auditor_id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="field"><label>Сотрудник</label><select id="dashEmployee"><option value="">Все сотрудники</option>${f.employees.map(x=>`<option value="${x.id}" data-region="${x.region_id}" ${sel.employee_id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div class="field"><label>Месяц</label><select id="dashMonth"><option value="">Все месяцы</option>${f.months.map(x=>`<option value="${x}" ${sel.month===x?'selected':''}>${x}</option>`).join('')}</select></div></div><div class="actions top-gap"><button class="btn secondary" id="resetDashFilters">Сбросить фильтры</button><span class="muted inline-loading" id="dashLoading" hidden>Обновление…</span><span class="muted">Фильтры применяются автоматически</span></div></div>`;
 }
 
 function filterDashboardDependentOptions(){
@@ -62,13 +62,34 @@ function filterDashboardDependentOptions(){
   if(auditor.selectedOptions[0]?.hidden)auditor.value='';
 }
 
+let dashboardFilterTimer=null;
+function currentDashboardFilters(){
+  return {
+    region_id:$('#dashRegion')?.value||'',
+    auditor_id:$('#dashAuditor')?.value||'',
+    employee_id:$('#dashEmployee')?.value||'',
+    month:$('#dashMonth')?.value||''
+  };
+}
+function scheduleDashboardRefresh(delay=180){
+  clearTimeout(dashboardFilterTimer);
+  dashboardFilterTimer=setTimeout(()=>dashboard(currentDashboardFilters(),{partial:true}),delay);
+}
 function bindDashboardFilters(){
-  const region=$('#dashRegion');
-  region.onchange=filterDashboardDependentOptions;
+  const region=$('#dashRegion'),auditor=$('#dashAuditor'),employee=$('#dashEmployee'),month=$('#dashMonth');
+  if(!region||!auditor||!employee||!month)return;
   filterDashboardDependentOptions();
-  $('#applyDashFilters').onclick=()=>dashboard({region_id:region.value,auditor_id:$('#dashAuditor').value,employee_id:$('#dashEmployee').value,month:$('#dashMonth').value},{partial:true});
+  region.onchange=()=>{
+    // При смене региона автоматически сбрасываются несовместимые значения.
+    filterDashboardDependentOptions();
+    scheduleDashboardRefresh();
+  };
+  auditor.onchange=()=>scheduleDashboardRefresh();
+  employee.onchange=()=>scheduleDashboardRefresh();
+  month.onchange=()=>scheduleDashboardRefresh();
   $('#resetDashFilters').onclick=()=>{
-    region.value='';$('#dashAuditor').value='';$('#dashEmployee').value='';$('#dashMonth').value='';
+    clearTimeout(dashboardFilterTimer);
+    region.value='';auditor.value='';employee.value='';month.value='';
     filterDashboardDependentOptions();
     dashboard({}, {partial:true});
   };
@@ -87,7 +108,7 @@ async function dashboard(filters={},opts={}){
   else{
     $('#dashboardResults')?.classList.add('section-loading');
     $('#dashLoading')?.removeAttribute('hidden');
-    $('#applyDashFilters').disabled=true;$('#resetDashFilters').disabled=true;
+    if($('#resetDashFilters'))$('#resetDashFilters').disabled=true;
   }
   const qs=new URLSearchParams(Object.entries(filters).filter(([,v])=>v));
   let d;
@@ -95,7 +116,7 @@ async function dashboard(filters={},opts={}){
   catch(e){
     if(e?.name==='AbortError'||sequence!==dashboardSequence)return;
     $('#dashboardResults')?.classList.remove('section-loading');$('#dashLoading')?.setAttribute('hidden','');
-    if($('#applyDashFilters'))$('#applyDashFilters').disabled=false;if($('#resetDashFilters'))$('#resetDashFilters').disabled=false;
+    if($('#resetDashFilters'))$('#resetDashFilters').disabled=false;
     return toast(e.message);
   }
   if(!isCurrentPage(pageId)||sequence!==dashboardSequence)return;
@@ -104,15 +125,10 @@ async function dashboard(filters={},opts={}){
     shell(`${mainNav('dashboard')}<div id="dashboardRoot"><div class="dashboard-head"><div><h1>Дашборд</h1><p class="muted">Статистика по завершённым аудитам</p></div></div>${dashboardFilterBox(f)}<div id="dashboardResults">${dashboardResults(d)}</div></div>`);
     bindNav();bindDashboardFilters();
   }else{
-    const oldFilterBox=document.querySelector('.dashboard-filters');
-    if(oldFilterBox){
-      const holder=document.createElement('div');holder.innerHTML=dashboardFilterBox(f);
-      oldFilterBox.replaceWith(holder.firstElementChild);
-      bindDashboardFilters();
-    }
+    // Не перерисовываем фильтры: это сохраняет фокус и исключает визуальную перезагрузку.
     const results=$('#dashboardResults');
     results.innerHTML=dashboardResults(d);results.classList.remove('section-loading');
-    $('#dashLoading').setAttribute('hidden','');$('#applyDashFilters').disabled=false;$('#resetDashFilters').disabled=false;
+    $('#dashLoading')?.setAttribute('hidden','');if($('#resetDashFilters'))$('#resetDashFilters').disabled=false;
     $$('[data-open]',results).forEach(r=>r.onclick=()=>openAudit(r.dataset.open));
   }
 }
