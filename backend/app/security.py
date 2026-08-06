@@ -6,7 +6,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.database import get_db
-from app.models import User
+from app.models import Role, User
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -40,8 +40,8 @@ def current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_
     user = db.get(User, user_id)
     if not user or not user.is_active:
         raise exc
-    # Руководитель может использовать учетную запись только на привязанном устройстве.
-    if user.role.value == "leader":
+    # Руководитель и аудитор могут использовать учетную запись только на привязанном устройстве.
+    if user.role in (Role.leader, Role.auditor):
         if not user.device_id or not token_device_id or token_device_id != user.device_id:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Устройство не зарегистрировано или привязка была сброшена")
     return user

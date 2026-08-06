@@ -88,7 +88,16 @@ function renderWizard(){
 function questionCards(qs,visit,map){let out='',last='';for(const q of qs){if(q.section!==last){if(last)out+='</div>';out+=`<div class="card"><h2>${esc(q.section)}</h2>`;last=q.section}const a=map[`${visit}:${q.key}`];out+=`<div class="question" data-key="${q.key}" data-visit="${visit}"><div class="question-title">${esc(q.text)} *</div><div class="answers two-options"><button class="answer ${a?.answer_value==='1'?'selected':''}" data-value="1">1 — выполнено</button><button class="answer ${a?.answer_value==='0'?'selected':''}" data-value="0">0 — не выполнено</button></div></div>`}if(last)out+='</div>';return out}
 function visitCheck(){return`<div class="card"><h2>Проверка</h2>${state.audit.visits.map(v=>`<div class="visit-row"><span>Визит ${v.visit_number}: ${esc(v.shop_code||'—')}</span><span>${v.latitude!=null&&v.longitude!=null?esc(v.latitude+', '+v.longitude):'Координаты не указаны'}</span></div>`).join('')}</div>`}
 
-function updateNextState(){const b=$('#next');if(!b)return;const saved=!state.syncing&&!state.pendingAnswers.size&&!Object.keys(state.pendingVisit).length;b.disabled=!(saved&&currentComplete())}
+function updateNextState(){
+  const b=$('#next');
+  if(!b)return;
+  const cooldownLeft=Math.max(0,(state.navigationCooldownUntil||0)-Date.now());
+  const saved=!state.syncing&&!state.pendingAnswers.size&&!Object.keys(state.pendingVisit).length;
+  b.disabled=!!state.navigationBusy||cooldownLeft>0||!(saved&&currentComplete());
+  b.setAttribute('aria-busy',state.navigationBusy?'true':'false');
+  if(state.navigationCooldownTimer){clearTimeout(state.navigationCooldownTimer);state.navigationCooldownTimer=null}
+  if(cooldownLeft>0){state.navigationCooldownTimer=setTimeout(()=>{state.navigationCooldownTimer=null;updateNextState()},cooldownLeft+30)}
+}
 function setSaving(t){const s=$('#saveState');if(s)s.textContent=t;updateNextState()}
 function updateLocalAnswer(visit,key,value){let found=state.audit.answers.find(a=>a.visit_number===visit&&a.question_key===key);if(found){found.answer_value=value;found.comment=null}else{found={visit_number:visit,question_key:key,answer_value:value,comment:null};state.audit.answers.push(found)}state.pendingAnswers.set(`${visit}:${key}`,found);persistDraft();scheduleSync();updateNextState()}
 function persistDraft(){if(state.audit)localStorage.setItem('sle_draft_'+state.audit.id,JSON.stringify({answers:state.audit.answers,visits:state.audit.visits,current_visit:state.visit,current_step:state.step,ts:Date.now()}))}
@@ -141,23 +150,85 @@ async function flushSync(extra={}){
     return flushSync();
   }
 }
-function bindWizard(){updateNextState();if(state.visit&&state.step===1)api(`/extras/audit/${state.audit.id}/visit/${state.visit}/start`,{method:'POST'}).catch(()=>{});$$('.answer').forEach(b=>b.onclick=()=>{const card=b.closest('.question');updateLocalAnswer(Number(card.dataset.visit),card.dataset.key,b.dataset.value);$$('.answer',card).forEach(x=>x.classList.toggle('selected',x===b))});$('#shopCode')?.addEventListener('input',saveVisitFields);$('#gps')?.addEventListener('click',captureGps);$('#visitComment')?.addEventListener('input',saveVisitFields);$('#visitGoal')?.addEventListener('input',saveVisitFields);$('#prev').onclick=prevStep;$('#next').onclick=nextStep}
-function saveVisitFields(extra={}){if(!state.visit)return;const visit=state.audit.visits.find(v=>v.visit_number===state.visit),payload={};if($('#shopCode'))payload.shop_code=$('#shopCode').value.trim();if($('#visitGoal'))payload.goal=$('#visitGoal').value.trim();if($('#visitComment'))payload.comment=$('#visitComment').value;Object.assign(payload,extra);Object.assign(visit,payload);Object.assign(state.pendingVisit,payload);persistDraft();scheduleSync();updateNextState()}
+function bindWizard(){
+  updateNextState();
+  if(state.visit&&state.step===1)api(`/extras/audit/${state.audit.id}/visit/${state.visit}/start`,{method:'POST'}).catch(()=>{});
+  $$('.answer').forEach(b=>b.onclick=()=>{const card=b.closest('.question');updateLocalAnswer(Number(card.dataset.visit),card.dataset.key,b.dataset.value);$$('.answer',card).forEach(x=>x.classList.toggle('selected',x===b))});
+  $('#shopCode')?.addEventListener('input',saveVisitFields);
+  $('#gps')?.addEventListener('click',captureGps);
+  $('#visitComment')?.addEventListener('input',saveVisitFields);
+  $('#visitGoal')?.addEventListener('input',saveVisitFields);
+  const prev=$('#prev'),next=$('#next');
+  if(prev)prev.onclick=e=>{e.preventDefault();if(state.navigationBusy||Date.now()<(state.navigationCooldownUntil||0))return;prevStep()};
+  if(next)next.onclick=e=>{e.preventDefault();e.stopPropagation();if(next.disabled||state.navigationBusy||Date.now()<(state.navigationCooldownUntil||0))return;nextStep()};
+}
+function saveVisitFields(extra={}){if(!state.visit||!state.audit)return;const visits=Array.isArray(state.audit.visits)?state.audit.visits:(state.audit.visits=[]);let visit=visits.find(v=>v&&v.visit_number===state.visit);if(!visit){visit={visit_number:state.visit,shop_code:'',goal:'',comment:'',latitude:null,longitude:null,gps_accuracy:null};visits.push(visit)}const payload={};if($('#shopCode'))payload.shop_code=$('#shopCode').value.trim();if($('#visitGoal'))payload.goal=$('#visitGoal').value.trim();if($('#visitComment'))payload.comment=$('#visitComment').value;if(extra&&extra.constructor===Object)Object.assign(payload,extra);if(!state.pendingVisit||typeof state.pendingVisit!=='object')state.pendingVisit={};Object.assign(visit,payload);Object.assign(state.pendingVisit,payload);persistDraft();scheduleSync();updateNextState()}
 function captureGps(){if(!navigator.geolocation)return toast('Геолокация не поддерживается на этом устройстве');const btn=$('#gps');if(btn){btn.disabled=true;btn.textContent='Определение местоположения…'}navigator.geolocation.getCurrentPosition(async p=>{try{saveVisitFields({latitude:p.coords.latitude,longitude:p.coords.longitude,gps_accuracy:p.coords.accuracy});await flushSync();toast('GPS-координаты сохранены');renderWizard()}catch(e){toast(e.message)}},e=>{if(btn){btn.disabled=false;btn.textContent='Определить местоположение'};const messages={1:'Доступ к геолокации запрещён',2:'Местоположение недоступно',3:'Превышено время ожидания GPS'};toast(messages[e.code]||('Не удалось определить местоположение: '+e.message))},{enableHighAccuracy:true,timeout:25000,maximumAge:0})}
 function currentComplete(){const map=answersMap(),qs=state.questions.filter(q=>q.step===state.step),visit=[0,8].includes(state.step)?0:state.visit;if(qs.some(q=>!map[`${visit}:${q.key}`]))return false;if(state.step===1){const v=state.audit.visits.find(x=>x.visit_number===state.visit);if(!v.shop_code||!v.goal||v.latitude==null||v.longitude==null)return false}return true}
 async function saveProgress(){await flushSync({current_visit:state.visit,current_step:state.step})}
-async function nextStep(){try{if(!currentComplete())throw new Error('Заполните код ТТ, цель визита, определите GPS и ответьте на все вопросы');if(state.step===8){
-  await flushSync();
+async function nextStep(){
+  if(state.navigationBusy||Date.now()<(state.navigationCooldownUntil||0))return;
+  const button=$('#next');
+  if(button?.disabled)return;
+  state.navigationBusy=true;
+  if(button){button.disabled=true;button.setAttribute('aria-busy','true')}
+  const fromVisit=state.visit,fromStep=state.step;
   try{
-    const r=await api(`/audits/${state.audit.id}/submit`,{method:'POST'});
-    state.audit={...state.audit,...r,status:'completed'};
-    return renderResult(state.audit);
-  }catch(err){
-    // Повторно загружаем аудит, чтобы пользователь сразу увидел,
-    // какой шаг действительно не дошёл до сервера.
-    try{state.audit=await api('/audits/'+state.audit.id)}catch{}
-    throw err;
+    if(!currentComplete())throw new Error('Заполните код ТТ, цель визита, определите GPS и ответьте на все вопросы');
+    if(fromStep===8){
+      await flushSync();
+      try{
+        const r=await api(`/audits/${state.audit.id}/submit`,{method:'POST'});
+        state.audit={...state.audit,...r,status:'completed'};
+        return renderResult(state.audit);
+      }catch(err){
+        try{state.audit=await api('/audits/'+state.audit.id)}catch{}
+        throw err;
+      }
+    }
+
+    // Переход вычисляется строго из снимка текущего экрана. Даже если пользователь
+    // нажал несколько раз, состояние изменится только один раз.
+    let nextVisit=fromVisit,nextStepValue=fromStep;
+    if(fromStep===0){nextVisit=1;nextStepValue=1}
+    else if(fromStep<7)nextStepValue=fromStep+1;
+    else if(fromVisit<5){
+      await api(`/extras/audit/${state.audit.id}/visit/${fromVisit}/end`,{method:'POST'}).catch(()=>{});
+      nextVisit=fromVisit+1;nextStepValue=1;
+    }else{
+      await api(`/extras/audit/${state.audit.id}/visit/${fromVisit}/end`,{method:'POST'}).catch(()=>{});
+      nextVisit=0;nextStepValue=8;
+    }
+    state.visit=nextVisit;
+    state.step=nextStepValue;
+    await saveProgress();
+    renderWizard();
+  }catch(e){toast(e.message)}
+  finally{
+    state.navigationBusy=false;
+    // Защита от двойного тапа и отложенного мобильного click после перерисовки.
+    state.navigationCooldownUntil=Date.now()+900;
+    updateNextState();
   }
-}if(state.step===0){state.visit=1;state.step=1}else if(state.step<7)state.step++;else if(state.visit<5){await api(`/extras/audit/${state.audit.id}/visit/${state.visit}/end`,{method:'POST'}).catch(()=>{});state.visit++;state.step=1}else{await api(`/extras/audit/${state.audit.id}/visit/${state.visit}/end`,{method:'POST'}).catch(()=>{});state.visit=0;state.step=8}await saveProgress();renderWizard()}catch(e){toast(e.message)}}
-async function prevStep(){if(state.step===0)return home();if(state.step===8){state.visit=5;state.step=7}else if(state.step>1)state.step--;else if(state.visit>1){state.visit--;state.step=7}else{state.visit=0;state.step=0}await saveProgress();renderWizard()}
+}
+async function prevStep(){
+  if(state.navigationBusy||Date.now()<(state.navigationCooldownUntil||0))return;
+  state.navigationBusy=true;
+  const prev=$('#prev'),next=$('#next');
+  if(prev)prev.disabled=true;if(next)next.disabled=true;
+  try{
+    if(state.step===0)return home();
+    if(state.step===8){state.visit=5;state.step=7}
+    else if(state.step>1)state.step--;
+    else if(state.visit>1){state.visit--;state.step=7}
+    else{state.visit=0;state.step=0}
+    await saveProgress();
+    renderWizard();
+  }catch(e){toast(e.message)}
+  finally{
+    state.navigationBusy=false;
+    state.navigationCooldownUntil=Date.now()+500;
+    updateNextState();
+  }
+}
 function renderResult(a){shell(`<div class="card accent result"><div class="saved">✅ Результаты сохранены</div><div class="score">${Math.round(a.total_percent||0)}%</div><h1>${esc(a.level||'')}</h1><p class="muted">${esc(a.employee_name||'')}</p><button class="btn primary" id="toHome">На главную</button></div>`);$('#toHome').onclick=home}

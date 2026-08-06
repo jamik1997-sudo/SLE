@@ -71,3 +71,8 @@ input[readonly]{opacity:.9;cursor:not-allowed}
 @media(max-width:900px){.grid.four,.audit-create-grid{align-items:stretch}.dashboard-filters .field label,.audit-create-grid .field label{min-height:auto}}
 
 .password-view{display:flex;align-items:center;gap:8px;min-width:180px}.password-view code{font-size:13px;overflow-wrap:anywhere;white-space:normal;color:var(--text)}
+
+/* v5.1 smooth partial refresh */
+.section-loading{opacity:.55;pointer-events:none;transition:opacity .15s ease;position:relative}
+.inline-loading{align-self:center;font-size:.9rem}
+[hidden]{display:none!important}
