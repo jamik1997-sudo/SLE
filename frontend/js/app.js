@@ -1,2 +1,2 @@
-// SLE v6.0 bootstrap
+// SLE v3.0 bootstrap
 boot();

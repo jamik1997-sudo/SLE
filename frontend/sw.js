@@ -1,97 +1,84 @@
-const CACHE_VERSION = "sle-audit-v6.1.1";
+const CACHE_VERSION = "sle-audit-v3.5.2";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
-
 const APP_SHELL = [
   '/',
   '/index.html',
   '/styles.v30.css',
+  '/js/app.js',
   '/config.js',
   '/manifest.webmanifest',
-  '/assets/icons/icon.svg',
-  '/js/app.js',
-  '/js/core/runtime.js',
-  '/js/pages/auth.js',
-  '/js/pages/home.js',
-  '/js/pages/reports.js',
-  '/js/pages/audit.js',
-  '/js/pages/admin.js'
+  '/assets/icons/icon.svg'
 ];
 
-self.addEventListener('install', (event) => {
+self.addEventListener('install', event => {
   event.waitUntil(
-    caches
-      .open(STATIC_CACHE)
-      .then((cache) => cache.addAll(APP_SHELL))
+    caches.open(STATIC_CACHE)
+      .then(cache => cache.addAll(APP_SHELL))
       .then(() => self.skipWaiting())
   );
 });
 
-self.addEventListener('activate', (event) => {
+self.addEventListener('activate', event => {
   event.waitUntil(
-    caches
-      .keys()
-      .then((keys) => Promise.all(
+    caches.keys()
+      .then(keys => Promise.all(
         keys
-          .filter((key) => key !== STATIC_CACHE)
-          .map((key) => caches.delete(key))
+          .filter(key => key !== STATIC_CACHE)
+          .map(key => caches.delete(key))
       ))
       .then(() => self.clients.claim())
   );
 });
 
-async function putInCache(request, response) {
-  if (!response || !response.ok || response.type === 'opaque') return;
-  const cache = await caches.open(STATIC_CACHE);
-  await cache.put(request, response);
-}
+self.addEventListener('message', event => {
+  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
+});
 
-self.addEventListener('fetch', (event) => {
+self.addEventListener('fetch', event => {
   const request = event.request;
   if (request.method !== 'GET') return;
 
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin) return;
 
-  const networkFirst =
+  // API and external resources are never cached by the PWA.
+  if (url.origin !== self.location.origin || url.hostname.includes('onrender.com')) return;
+
+  const isFreshAppFile =
     request.mode === 'navigate' ||
-    ['/index.html', '/config.js', '/sw.js', '/manifest.webmanifest'].includes(url.pathname);
+    ['/index.html', '/js/app.js', '/styles.v30.css', '/config.js', '/manifest.webmanifest', '/sw.js'].includes(url.pathname);
 
-  if (networkFirst) {
-    event.respondWith((async () => {
-      try {
-        const response = await fetch(request, { cache: 'no-store' });
-
-        if (response.ok && url.pathname !== '/sw.js') {
-          const cacheCopy = response.clone();
-          event.waitUntil(putInCache(request, cacheCopy));
-        }
-
-        return response;
-      } catch (error) {
-        const cached = await caches.match(request);
-        if (cached) return cached;
-
-        if (request.mode === 'navigate') {
-          const shell = await caches.match('/index.html');
-          if (shell) return shell;
-        }
-
-        throw error;
-      }
-    })());
+  // Network first for files that change with every release.
+  if (isFreshAppFile) {
+    event.respondWith(
+      fetch(request, { cache: 'no-store' })
+        .then(response => {
+          if (response.ok && url.pathname !== '/sw.js') {
+            const copy = response.clone();
+            caches.open(STATIC_CACHE).then(cache => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(async () => {
+          const cached = await caches.match(request);
+          if (cached) return cached;
+          if (request.mode === 'navigate') return caches.match('/index.html');
+          throw new Error('Resource unavailable offline');
+        })
+    );
     return;
   }
 
-  event.respondWith((async () => {
-    const cached = await caches.match(request);
-    if (cached) return cached;
-
-    const response = await fetch(request);
-    if (response.ok) {
-      const cacheCopy = response.clone();
-      event.waitUntil(putInCache(request, cacheCopy));
-    }
-
-    return response;
-  })());
+  // Cache first for versioned/static assets such as icons.
+  event.respondWith(
+    caches.match(request).then(cached => {
+      if (cached) return cached;
+      return fetch(request).then(response => {
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(STATIC_CACHE).then(cache => cache.put(request, copy));
+        }
+        return response;
+      });
+    })
+  );
 });

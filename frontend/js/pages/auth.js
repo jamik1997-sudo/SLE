@@ -1,5 +1,5 @@
 async function boot(){
-  applyTheme();state.regions=null
+  applyTheme();wakeServer();startKeepAlive();state.regions=null
   window.addEventListener('online',syncStatus);window.addEventListener('offline',syncStatus);syncStatus();
   if('serviceWorker' in navigator){
     try{
@@ -29,7 +29,7 @@ async function boot(){
     if(cachedMe){try{state.me=JSON.parse(cachedMe)}catch{}}
     if(state.me)home();
     state.me=await api('/auth/me');localStorage.setItem('sle_me',JSON.stringify(state.me));
-    if(!document.querySelector('.shell'))home();
+    if(!document.querySelector('.shell'))await home();
   }catch{logout()}
 }
 function renderLogin(){

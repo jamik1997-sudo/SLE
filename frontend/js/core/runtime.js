@@ -1,4 +1,4 @@
-// SLE frontend build v6.1 — staged loading, deduplicated requests and stable navigation
+// SLE frontend build v2.9
 const API=(window.SLE_CONFIG?.API_URL||'').replace(/\/$/,'');
 const app=document.getElementById('app');
 
@@ -52,31 +52,21 @@ const state={
   theme:localStorage.getItem('sle_theme')||'light',
   me:null,audits:[],questions:JSON.parse(localStorage.getItem('sle_questions')||'[]'),
   audit:null,visit:0,step:0,regions:null,employees:new Map(),
-  pendingAnswers:new Map(),pendingVisit:{},syncTimer:null,syncing:null,
-  dashboardOptions:null,dashboardData:null,pageData:new Map()
+  pendingAnswers:new Map(),pendingVisit:{},syncTimer:null,syncing:null
 };
 const $=(s,r=document)=>r.querySelector(s);
 const $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const requestCache=new Map();
 const inflightGets=new Map();
 function cacheTtl(path){
-  if(path==='/auth/me')return 10*60*1000;
-  if(path==='/admin/bootstrap')return 5*60*1000;
+  if(path==='/auth/me')return 5*60*1000;
   if(path==='/audits/questionnaire'||path==='/audits/regions')return 5*60*1000;
   if(path.startsWith('/audits/employees'))return 2*60*1000;
   if(path.startsWith('/audits/dashboard'))return 30*1000;
-  if(path.startsWith('/audits?'))return 30*1000;
-  if(path.startsWith('/extras/logs'))return 30*1000;
+  if(path.startsWith('/audits?'))return 15*1000;
   return 0;
 }
 function clearRequestCache(){requestCache.clear();inflightGets.clear()}
-let pageRequestId=0;
-function beginPage(){return ++pageRequestId}
-function isCurrentPage(id){return id===pageRequestId}
-function loadingPage(active,title='Загрузка…'){
-  shell(`${mainNav(active)}<div class="card"><h1>${esc(title)}</h1><p class="muted">Данные загружаются, интерфейс остаётся доступным.</p></div>`);
-  bindNav();
-}
 
 function toast(msg){const t=$('#toast');t.textContent=msg;t.hidden=false;setTimeout(()=>t.hidden=true,3200)}
 function authHeaders(){return state.token?{'Authorization':`Bearer ${state.token}`}: {}}
@@ -98,24 +88,17 @@ async function api(path,opt={}){
   }
   const run=(async()=>{
     const retryable=method==='GET'||path==='/auth/login';
-    const attempts=retryable?2:1;
+    const attempts=retryable?4:1;
     let lastError;
     for(let attempt=0;attempt<attempts;attempt++){
       const controller=new AbortController();
-      const externalSignal=opt.signal;
-      const abortFromExternal=()=>controller.abort(externalSignal?.reason);
-      if(externalSignal){
-        if(externalSignal.aborted)controller.abort(externalSignal.reason);
-        else externalSignal.addEventListener('abort',abortFromExternal,{once:true});
-      }
-      const timeoutMs=opt.timeout||(attempt===0?8000:12000);
+      const timeoutMs=opt.timeout||(attempt===0?12000:25000);
       const timeout=setTimeout(()=>controller.abort(),timeoutMs);
       const headers={...authHeaders(),...(opt.headers||{})};
       if(opt.body!=null)headers['Content-Type']='application/json';
       try{
         if(attempt>0)setServerWake(true);
-        const {signal: _ignoredSignal,...fetchOptions}=opt;
-        const res=await fetch(API+path,{...fetchOptions,headers,signal:controller.signal,cache:'no-store'});
+        const res=await fetch(API+path,{...opt,headers,signal:controller.signal,cache:'no-store'});
         let data={};try{data=await res.json()}catch{}
         if(res.ok){
           if(ttl)requestCache.set(cacheKey,{ts:Date.now(),data});
@@ -124,7 +107,7 @@ async function api(path,opt={}){
         }
         if(retryable&&[502,503,504].includes(res.status)&&attempt<attempts-1){
           lastError=new Error('Сервер запускается');
-          await sleep(500);
+          await sleep([800,1600,3000][attempt]||3000);
           continue;
         }
         let message=`Ошибка ${res.status}`;
@@ -134,13 +117,11 @@ async function api(path,opt={}){
         else if(data.message)message=data.message;
         console.error('API error',path,data);throw new Error(message);
       }catch(e){
-        if(externalSignal?.aborted)throw e;
-        lastError=e.name==='AbortError'?new Error('Сервер отвечает слишком долго'):e;
+        lastError=e.name==='AbortError'?new Error('Сервер запускается слишком долго'):e;
         if(!retryable||attempt===attempts-1)throw lastError;
-        await sleep(500);
+        await sleep([800,1600,3000][attempt]||3000);
       }finally{
         clearTimeout(timeout);
-        if(externalSignal)externalSignal.removeEventListener('abort',abortFromExternal);
         if(attempt>0)setServerWake(false);
       }
     }
@@ -149,8 +130,18 @@ async function api(path,opt={}){
   if(ttl)inflightGets.set(cacheKey,run);
   try{return await run}finally{if(ttl)inflightGets.delete(cacheKey)}
 }
-async function wakeServer(){ return true }
-function startKeepAlive(){}
+async function wakeServer(){
+  try{
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),7000);
+    await fetch(API+'/health',{signal:controller.signal,cache:'no-store'});
+    clearTimeout(timer);
+  }catch{}
+}
+function startKeepAlive(){
+  if(window.__sleKeepAlive)return;
+  window.__sleKeepAlive=setInterval(()=>{if(document.visibilityState==='visible'&&navigator.onLine)wakeServer()},9*60*1000);
+}
 
 function esc(v=''){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function roleName(role){return role==='admin'?'Администратор':role==='manager'?'Менеджер':role==='auditor'?'Аудитор':'Руководитель'}
@@ -161,5 +152,5 @@ function shell(content){
   app.innerHTML=`<div class="shell"><header class="topbar"><div class="brand"><i></i>SLE</div>${profile}</header><div class="container">${content}</div></div>`;
   $('#logout')?.addEventListener('click',logout);$('#themeToggle')?.addEventListener('click',toggleTheme);$('#changePassword')?.addEventListener('click',changePasswordPage);
 }
-function logout(){clearRequestCache();state.pageData.clear();state.dashboardOptions=null;state.dashboardData=null;localStorage.removeItem('sle_token');localStorage.removeItem('sle_me');localStorage.removeItem('sle_regions');localStorage.removeItem('sle_admin_bootstrap');localStorage.removeItem('sle_dashboard_options');localStorage.removeItem('sle_dashboard_data');state.token='';state.me=null;state.regions=null;state.employees.clear();renderLogin()}
+function logout(){clearRequestCache();localStorage.removeItem('sle_token');localStorage.removeItem('sle_me');localStorage.removeItem('sle_regions');state.token='';state.me=null;state.regions=null;state.employees.clear();renderLogin()}
 function syncStatus(){$('#offline')?.toggleAttribute('hidden',navigator.onLine)}

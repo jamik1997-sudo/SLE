@@ -6,7 +6,6 @@ from app.database import get_db
 from app.models import Employee, Region, Role, User, UserRegion, ActivityLog
 from app.schemas import UserCreate
 from app.security import hash_password, require_roles
-from app.cache import get_cache, set_cache, clear_cache
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -18,12 +17,19 @@ def _ensure_can_manage(actor: User, target: User):
         raise HTTPException(400, "Нельзя удалить собственную учетную запись")
 
 
-def _serialize_users(rows, actor: User):
+@router.get("/users")
+def users(db: Session = Depends(get_db), actor: User = Depends(require_roles(Role.admin, Role.manager))):
+    rows = db.scalars(select(User).options(selectinload(User.regions).selectinload(UserRegion.region)).where(User.is_active == True).order_by(User.full_name)).all()
     result = []
     for u in rows:
+        # Administrators can view every stored display password. Managers can
+        # view passwords of non-administrator accounts only.
         can_view_password = actor.role == Role.admin or (actor.role == Role.manager and u.role != Role.admin)
         result.append({
-            "id": u.id, "full_name": u.full_name, "login": u.login, "role": u.role.value,
+            "id": u.id,
+            "full_name": u.full_name,
+            "login": u.login,
+            "role": u.role.value,
             "is_active": u.is_active,
             "regions": [{"id": x.region.id, "name": x.region.name} for x in u.regions],
             "device_bound": bool(u.device_id) if u.role == Role.leader else False,
@@ -34,42 +40,6 @@ def _serialize_users(rows, actor: User):
             "password_visible": u.password_visible if can_view_password else None,
         })
     return result
-
-
-@router.get("/bootstrap")
-def bootstrap(db: Session = Depends(get_db), actor: User = Depends(require_roles(Role.admin, Role.manager))):
-    """One round-trip for the management page instead of three parallel requests."""
-    cache_key = f"admin-bootstrap:v61:{actor.role.value}"
-    cached = get_cache(cache_key)
-    if cached is not None:
-        return cached
-    user_rows = db.scalars(
-        select(User).options(selectinload(User.regions).selectinload(UserRegion.region))
-        .where(User.is_active == True).order_by(User.full_name)
-    ).all()
-    region_rows = db.scalars(
-        select(Region).where(Region.is_active == True).order_by(Region.name)
-    ).all()
-    employee_rows = db.scalars(
-        select(Employee).options(selectinload(Employee.region), selectinload(Employee.leader))
-        .where(Employee.is_active == True).join(Employee.region)
-        .order_by(Region.name, Employee.full_name)
-    ).all()
-    return set_cache(cache_key, {
-        "users": _serialize_users(user_rows, actor),
-        "regions": [{"id": r.id, "name": r.name} for r in region_rows],
-        "employees": [{
-            "id": x.id, "full_name": x.full_name, "position": x.position,
-            "region_id": x.region_id, "region_name": x.region.name,
-            "leader_id": x.leader_id, "leader_name": x.leader.full_name if x.leader else None,
-        } for x in employee_rows],
-    }, ttl=300)
-
-
-@router.get("/users")
-def users(db: Session = Depends(get_db), actor: User = Depends(require_roles(Role.admin, Role.manager))):
-    rows = db.scalars(select(User).options(selectinload(User.regions).selectinload(UserRegion.region)).where(User.is_active == True).order_by(User.full_name)).all()
-    return _serialize_users(rows, actor)
 
 
 @router.post("/users")
@@ -85,7 +55,7 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db), actor: User 
     user=User(full_name=payload.full_name.strip(),login=login,password_hash=hash_password(payload.password),password_visible=payload.password,role=payload.role)
     db.add(user);db.flush()
     if payload.role==Role.leader: db.add(UserRegion(user_id=user.id,region_id=payload.region_ids[0]))
-    db.add(ActivityLog(user_id=actor.id,action="Создал пользователя",entity_type="user",entity_id=user.id,details=user.full_name));db.commit(); clear_cache("admin-bootstrap:")
+    db.add(ActivityLog(user_id=actor.id,action="Создал пользователя",entity_type="user",entity_id=user.id,details=user.full_name));db.commit()
     return {"id":user.id}
 
 
