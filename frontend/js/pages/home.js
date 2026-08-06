@@ -2,11 +2,19 @@ function mainNav(active='home'){
   const admin=['admin','manager'].includes(state.me.role)?'<button class="pill" data-page="admin">Управление</button>':'';
   return `<div class="nav"><button class="pill ${active==='home'?'active':''}" data-page="home">Главная</button><button class="pill ${active==='dashboard'?'active':''}" data-page="dashboard">Дашборд</button><button class="pill ${active==='history'?'active':''}" data-page="history">Отчёты</button>${admin}${['admin','manager'].includes(state.me.role)?'<button class="pill '+(active==='logs'?'active':'')+'" data-page="logs">Журнал</button>':''}${state.me.role==='admin'?'<button class="pill '+(active==='settings'?'active':'')+'" data-page="settings">Настройки</button>':''}</div>`;
 }
+let newAuditOpenBusy=false;
 function renderHome(){
   state.audits=state.audits.filter(a=>a.status!=='cancelled');
   const drafts=state.audits.filter(a=>['draft','in_progress'].includes(a.status)&&a.is_mine!==false);
   shell(`${mainNav('home')}${drafts.length?`<div class="card accent"><h2>Черновики</h2>${drafts.map(d=>`<div class="visit-row"><span>${esc(d.employee_name)} · ${esc(d.region_name)}</span><span class="actions"><button class="btn primary small" data-resume="${d.id}">Продолжить</button></span></div>`).join('')}</div>`:''}<div class="card"><h2>Новый аудит</h2><p class="muted">Оценка сотрудника по пяти торговым точкам</p><button class="btn primary" id="newAudit">Начать</button></div><div class="card"><h2>Последние аудиты</h2>${auditTable(state.audits.slice(0,8))}</div>`);
-  bindNav();$('#newAudit')?.addEventListener('click',newAuditForm);$$('[data-resume]').forEach(b=>b.onclick=()=>openAudit(b.dataset.resume));
+  bindNav();
+  const newAuditButton=$('#newAudit');
+  if(newAuditButton)newAuditButton.onclick=async()=>{
+    if(newAuditOpenBusy||newAuditButton.disabled)return;
+    newAuditOpenBusy=true;newAuditButton.disabled=true;newAuditButton.textContent='Открытие…';
+    try{await newAuditForm()}finally{newAuditOpenBusy=false}
+  };
+  $$('[data-resume]').forEach(b=>b.onclick=()=>openAudit(b.dataset.resume));
 }
 async function home(){
   const pageId=beginPage();

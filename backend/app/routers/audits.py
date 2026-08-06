@@ -426,6 +426,27 @@ def create_audit(payload: AuditCreate, db: Session = Depends(get_db), user: User
     # Дата всегда устанавливается сервером по часовому поясу Узбекистана.
     from zoneinfo import ZoneInfo
     today_tashkent=datetime.now(ZoneInfo("Asia/Tashkent")).date()
+
+    # Защита от двойного/тройного нажатия на телефоне. Для PostgreSQL
+    # сериализуем создание одного активного аудита пользователя по сотруднику и дате.
+    if db.bind and db.bind.dialect.name == "postgresql":
+        lock_key = f"audit-create:{user.id}:{employee.id}:{today_tashkent.isoformat()}"
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": lock_key})
+
+    existing = db.scalar(
+        select(Audit)
+        .where(
+            Audit.audit_date == today_tashkent,
+            Audit.employee_id == employee.id,
+            Audit.auditor_id == user.id,
+            Audit.status.in_([AuditStatus.draft, AuditStatus.in_progress]),
+        )
+        .order_by(Audit.started_at.desc())
+        .limit(1)
+    )
+    if existing:
+        return {"id": existing.id, "reused": True}
+
     audit=Audit(audit_date=today_tashkent,employee_id=employee.id,region_id=region_id,auditor_id=user.id,leader_id=leader_id)
     db.add(audit);db.flush()
     for n in range(1,6): db.add(Visit(audit_id=audit.id,visit_number=n))

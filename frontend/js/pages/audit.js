@@ -24,6 +24,7 @@ function clearEmployeeCache(regionId){
   state.employees.delete(regionId);
   localStorage.removeItem('sle_employees_'+regionId);
 }
+let createAuditRequestBusy=false;
 async function newAuditForm(){
   // Список регионов всегда обновляем с сервера. Это предотвращает ситуацию,
   // когда после входа под другой роль в localStorage остаётся только один регион.
@@ -45,13 +46,18 @@ async function newAuditForm(){
   $('#region')?.addEventListener('change',refreshEmployees);
   $('#createAudit').onsubmit=async e=>{
     e.preventDefault();
+    e.stopPropagation();
     const form=e.target;
+    if(createAuditRequestBusy||form.dataset.submitting==='1')return;
+    createAuditRequestBusy=true;form.dataset.submitting='1';
     const p=Object.fromEntries(new FormData(form));
     const submit=form.querySelector('button[type="submit"],button:not([type])');
-    if(submit)submit.disabled=true;
+    const back=$('#back');
+    if(submit){submit.disabled=true;submit.textContent='Создание…'}
+    if(back)back.disabled=true;
     try{
       const d=await api('/audits',{method:'POST',body:JSON.stringify(p)});
-      openAudit(d.id);
+      await openAudit(d.id);
     }catch(err){
       // На телефоне мог сохраниться старый employee_id после удаления/пересоздания сотрудника.
       if(/Сотрудник не найден/i.test(err.message||'')){
@@ -67,7 +73,10 @@ async function newAuditForm(){
           toast('Список сотрудников обновлён. Выберите сотрудника повторно.');
         }
       }else toast(err.message);
-    }finally{if(submit)submit.disabled=false}
+    }finally{
+      createAuditRequestBusy=false;delete form.dataset.submitting;
+      if(document.body.contains(form)){if(submit){submit.disabled=false;submit.textContent='Создать аудит'}if(back)back.disabled=false}
+    }
   };
 }
 async function openAudit(id){try{state.questions=await api('/audits/questionnaire',{force:true});localStorage.setItem('sle_questions',JSON.stringify(state.questions));state.audit=await api('/audits/'+id,{force:true});if(state.audit.status==='completed')return renderResult(state.audit);state.visit=state.audit.current_visit||0;state.step=state.audit.current_step||0;renderWizard()}catch(e){if(/прошлого дня|не найден/i.test(e.message)){localStorage.removeItem('sle_draft_'+id);state.audits=state.audits.filter(a=>a.id!==id);localStorage.setItem('sle_audits_cache',JSON.stringify(state.audits));toast(e.message);return home()}toast(e.message)}}
