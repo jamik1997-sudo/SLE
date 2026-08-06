@@ -76,3 +76,5 @@ input[readonly]{opacity:.9;cursor:not-allowed}
 .section-loading{opacity:.55;pointer-events:none;transition:opacity .15s ease;position:relative}
 .inline-loading{align-self:center;font-size:.9rem}
 [hidden]{display:none!important}
+
+.brand-home{appearance:none;border:0;background:transparent;color:inherit;padding:4px 2px;cursor:pointer;font:inherit}.brand-home:hover{opacity:.82}.brand-home:focus-visible{outline:3px solid rgba(255,212,0,.35);outline-offset:4px;border-radius:8px}

@@ -159,8 +159,14 @@ function applyTheme(){document.documentElement.dataset.theme=state.theme;documen
 function toggleTheme(){state.theme=state.theme==='dark'?'light':'dark';localStorage.setItem('sle_theme',state.theme);applyTheme();const b=$('#themeToggle');if(b)b.textContent=state.theme==='dark'?'☀️':'🌙'}
 function shell(content){
   const canSelfChange=state.me&&!['leader','auditor'].includes(state.me.role);const profile=state.me?`<div class="profile"><div><strong>${esc(state.me.full_name)}</strong><small>${roleName(state.me.role)}</small></div>${canSelfChange?'<button class="pill" id="changePassword">Пароль</button>':''}<button class="icon-btn" id="themeToggle" title="Сменить тему">${state.theme==='dark'?'☀️':'🌙'}</button><button class="pill" id="logout">Выйти</button></div>`:'';
-  app.innerHTML=`<div class="shell"><header class="topbar"><div class="brand"><i></i>SLE</div>${profile}</header><div class="container">${content}</div></div>`;
-  $('#logout')?.addEventListener('click',logout);$('#themeToggle')?.addEventListener('click',toggleTheme);$('#changePassword')?.addEventListener('click',changePasswordPage);
+  app.innerHTML=`<div class="shell"><header class="topbar"><button type="button" class="brand brand-home" id="brandHome" title="В главное меню" aria-label="Перейти в главное меню"><i></i>SLE</button>${profile}</header><div class="container">${content}</div></div>`;
+  $('#logout')?.addEventListener('click',logout);$('#themeToggle')?.addEventListener('click',toggleTheme);$('#changePassword')?.addEventListener('click',changePasswordPage);$('#brandHome')?.addEventListener('click',goHomeFromBrand);
+}
+
+function goHomeFromBrand(){
+  const auditActive=state.audit&&['draft','in_progress'].includes(state.audit.status);
+  if(auditActive&&!confirm('Аудит не завершён. Перейти в главное меню? Все сохранённые данные останутся в черновике.'))return;
+  home();
 }
 function logout(){clearRequestCache();state.pageData.clear();state.dashboardOptions=null;state.dashboardData=null;localStorage.removeItem('sle_token');localStorage.removeItem('sle_me');localStorage.removeItem('sle_regions');localStorage.removeItem('sle_admin_bootstrap');localStorage.removeItem('sle_dashboard_options');localStorage.removeItem('sle_dashboard_data');state.token='';state.me=null;state.regions=null;state.employees.clear();renderLogin()}
 function syncStatus(){$('#offline')?.toggleAttribute('hidden',navigator.onLine)}
