@@ -243,7 +243,7 @@ def dashboard(
             QuestionSetting.section,
             func.min(QuestionSetting.sort_order).label("sort_order"),
             func.sum(case((Answer.answer_value == "1", QuestionSetting.weight), else_=0.0)).label("earned"),
-            func.sum(QuestionSetting.weight).label("possible"),
+            func.sum(case((Answer.answer_value.in_(["0", "1"]), QuestionSetting.weight), else_=0.0)).label("possible"),
             func.count(distinct(func.concat(Answer.audit_id, ':', Answer.visit_number))).label("instances"),
         )
         .select_from(Answer)
@@ -313,6 +313,8 @@ def dashboard(
                 weight = float(question.weight or 0)
                 section_name = merged_section(question.section)
                 section = section_scores.setdefault(section_name, {"earned": 0.0, "possible": 0.0})
+                if answer.answer_value == "NA":
+                    continue
                 section["possible"] += weight
                 possible += weight
                 if answer.answer_value == "1":
@@ -485,7 +487,7 @@ def save_answer(audit_id: str, payload: AnswerSave, db: Session = Depends(get_db
     audit = load_audit_basic(db, audit_id); ensure_access(user, audit, write=True)
     q = QUESTION_MAP.get(payload.question_key)
     if not q: raise HTTPException(400, "Неизвестный вопрос")
-    if payload.answer_value not in ["1", "0"]: raise HTTPException(400, "Недопустимый ответ")
+    if payload.answer_value not in (["1", "0", "NA"] if q.get("section") in ("Работа с возражениями", "Обучение персонала") else ["1", "0"]): raise HTTPException(400, "Недопустимый ответ")
     answer = db.scalar(select(Answer).where(Answer.audit_id == audit.id, Answer.visit_number == payload.visit_number, Answer.question_key == payload.question_key))
     if not answer:
         answer = Answer(audit_id=audit.id, visit_number=payload.visit_number, question_key=payload.question_key, answer_value=payload.answer_value)
@@ -533,7 +535,8 @@ def batch_sync(audit_id: str, payload: BatchSyncIn, db: Session = Depends(get_db
             q = QUESTION_MAP.get(item.question_key)
             if not q:
                 raise HTTPException(400, f"Неизвестный вопрос: {item.question_key}")
-            if item.answer_value not in ("1", "0"):
+            allowed_values = ("1", "0", "NA") if q.get("section") in ("Работа с возражениями", "Обучение персонала") else ("1", "0")
+            if item.answer_value not in allowed_values:
                 raise HTTPException(400, "Недопустимый ответ")
             incoming[(item.visit_number, item.question_key)] = item
 
@@ -646,7 +649,8 @@ def submit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(cu
         required_visits = [0] if q["step"] in (0, 8) else range(1, 6)
         for visit_number in required_visits:
             answer = answer_map.get((visit_number, q["key"]))
-            if answer is None or str(answer.answer_value) not in ("0", "1"):
+            allowed_values = ("0", "1", "NA") if q["section"] in ("Работа с возражениями", "Обучение персонала") else ("0", "1")
+            if answer is None or str(answer.answer_value) not in allowed_values:
                 missing.append(f"{visit_number}:{q['key']}")
                 where = "Общая информация" if visit_number == 0 and q["step"] == 0 else (
                     "Завершение дня" if visit_number == 0 else f"Визит {visit_number}, шаг {q['step']}"

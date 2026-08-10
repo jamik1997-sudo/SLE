@@ -6,10 +6,13 @@ def calculate(audit: Audit, questions=None, confident_min=65.0, master_min=85.0)
     questions=questions or QUESTIONS
     by_key=defaultdict(list)
     for answer in audit.answers: by_key[answer.question_key].append(answer.answer_value)
-    section_scores=defaultdict(float); total=0.0; maximum=sum(float(q["weight"]) for q in questions if q.get("is_active",True))
+    section_scores=defaultdict(float); total=0.0; maximum=0.0
     for q in questions:
         if not q.get("is_active",True): continue
         values=by_key.get(q["key"],[]); applicable=[v for v in values if v in ("1","0")]
+        if values and not applicable and all(v == "NA" for v in values):
+            continue
+        maximum += float(q["weight"])
         score=0.0 if not applicable else (sum(1 for v in applicable if v=="1")/len(applicable))*float(q["weight"])
         section_scores[q["section"]]+=score; total+=score
     percent=round((total/maximum)*100,2) if maximum else 0.0
