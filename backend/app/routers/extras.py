@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from io import BytesIO
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -11,6 +12,92 @@ from app.database import get_db
 from app.models import (ActivityLog, Answer, Audit, AuditStatus, Employee, QuestionSetting, Region, Role, ScoreSetting, User, Visit, VisitTiming)
 from app.security import current_user, require_roles
 from app.timezone_utils import to_tashkent_naive
+
+
+
+def _legacy_visit_text(value):
+    """Normalize current/legacy visit text values for reports."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+def _legacy_visit_goal_and_comment(visit=None, audit=None):
+    """
+    Backward-compatible lookup for visit goal/comment.
+    Current fields are preferred; then known legacy aliases / JSON containers.
+    """
+    goal = ""
+    comment = ""
+
+    def pick(obj, names):
+        if obj is None:
+            return ""
+        for name in names:
+            try:
+                if isinstance(obj, dict):
+                    v = obj.get(name)
+                else:
+                    v = getattr(obj, name, None)
+            except Exception:
+                v = None
+            v = _legacy_visit_text(v)
+            if v:
+                return v
+        return ""
+
+    goal_names = (
+        "goal", "visit_goal", "purpose", "visit_purpose",
+        "goal_text", "purpose_text", "target", "visit_target",
+    )
+    comment_names = (
+        "comment", "visit_comment", "goal_comment",
+        "purpose_comment", "comment_text", "visit_notes", "notes",
+    )
+
+    goal = pick(visit, goal_names)
+    comment = pick(visit, comment_names)
+
+    # Search JSON-ish legacy containers, if present.
+    containers = []
+    for obj in (visit, audit):
+        if obj is None:
+            continue
+        for name in ("data", "payload", "draft", "draft_data", "meta", "metadata", "visit_data", "extra"):
+            try:
+                value = obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
+            except Exception:
+                value = None
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except Exception:
+                    value = None
+            if isinstance(value, dict):
+                containers.append(value)
+
+    for data in containers:
+        if not goal:
+            goal = pick(data, goal_names)
+        if not comment:
+            comment = pick(data, comment_names)
+        # Common nested visit object
+        nested = data.get("visit") if isinstance(data, dict) else None
+        if isinstance(nested, dict):
+            if not goal:
+                goal = pick(nested, goal_names)
+            if not comment:
+                comment = pick(nested, comment_names)
+
+    # Some old builds stored initial visit fields directly on Audit.
+    if not goal:
+        goal = pick(audit, goal_names)
+    if not comment:
+        comment = pick(audit, comment_names)
+
+    return goal or "—", comment or "—"
+
 
 router = APIRouter(prefix="/extras", tags=["extras"])
 
@@ -293,7 +380,7 @@ def export_questionnaire_xlsx(
                 audit.id, audit.audit_date, status_names.get(audit.status.value, audit.status.value),
                 audit.region.name if audit.region else "", audit.employee.full_name if audit.employee else "",
                 audit.auditor.full_name if audit.auditor else "", answer.visit_number,
-                visit.shop_code if visit else "", visit.goal if visit else "", visit.comment if visit else "",
+                visit.shop_code if visit else "", _legacy_visit_goal_and_comment(visit, locals().get("audit"))[0] if visit else "", visit.comment if visit else "",
                 visit.latitude if visit else None, visit.longitude if visit else None,
                 q.section, q.text_ru, answer.answer_value, answer.comment or "", to_tashkent_naive(answer.updated_at),
             ])

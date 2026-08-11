@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, date
 import logging
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,6 +12,92 @@ from app.schemas import AnswerSave, AuditCreate, ProgressSave, VisitSave, BatchS
 from app.security import current_user
 from app.services.scoring import calculate
 from app.cache import get_cache, set_cache, clear_cache
+
+
+
+def _legacy_visit_text(value):
+    """Normalize current/legacy visit text values for reports."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+def _legacy_visit_goal_and_comment(visit=None, audit=None):
+    """
+    Backward-compatible lookup for visit goal/comment.
+    Current fields are preferred; then known legacy aliases / JSON containers.
+    """
+    goal = ""
+    comment = ""
+
+    def pick(obj, names):
+        if obj is None:
+            return ""
+        for name in names:
+            try:
+                if isinstance(obj, dict):
+                    v = obj.get(name)
+                else:
+                    v = getattr(obj, name, None)
+            except Exception:
+                v = None
+            v = _legacy_visit_text(v)
+            if v:
+                return v
+        return ""
+
+    goal_names = (
+        "goal", "visit_goal", "purpose", "visit_purpose",
+        "goal_text", "purpose_text", "target", "visit_target",
+    )
+    comment_names = (
+        "comment", "visit_comment", "goal_comment",
+        "purpose_comment", "comment_text", "visit_notes", "notes",
+    )
+
+    goal = pick(visit, goal_names)
+    comment = pick(visit, comment_names)
+
+    # Search JSON-ish legacy containers, if present.
+    containers = []
+    for obj in (visit, audit):
+        if obj is None:
+            continue
+        for name in ("data", "payload", "draft", "draft_data", "meta", "metadata", "visit_data", "extra"):
+            try:
+                value = obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
+            except Exception:
+                value = None
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except Exception:
+                    value = None
+            if isinstance(value, dict):
+                containers.append(value)
+
+    for data in containers:
+        if not goal:
+            goal = pick(data, goal_names)
+        if not comment:
+            comment = pick(data, comment_names)
+        # Common nested visit object
+        nested = data.get("visit") if isinstance(data, dict) else None
+        if isinstance(nested, dict):
+            if not goal:
+                goal = pick(nested, goal_names)
+            if not comment:
+                comment = pick(nested, comment_names)
+
+    # Some old builds stored initial visit fields directly on Audit.
+    if not goal:
+        goal = pick(audit, goal_names)
+    if not comment:
+        comment = pick(audit, comment_names)
+
+    return goal or "—", comment or "—"
+
 
 router = APIRouter(prefix="/audits", tags=["audits"])
 sync_logger = logging.getLogger("sle.sync")

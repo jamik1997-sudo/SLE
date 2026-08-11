@@ -1,4 +1,33 @@
 
+function legacyVisitField(obj, kind) {
+  if (!obj) return "—";
+  const goalKeys = ["goal","visit_goal","purpose","visit_purpose","goal_text","purpose_text","target","visit_target"];
+  const commentKeys = ["comment","visit_comment","goal_comment","purpose_comment","comment_text","visit_notes","notes"];
+  const keys = kind === "goal" ? goalKeys : commentKeys;
+  const pick = (src) => {
+    if (!src || typeof src !== "object") return "";
+    for (const k of keys) {
+      const v = src[k];
+      if (v !== undefined && v !== null && String(v).trim()) return String(v).trim();
+    }
+    return "";
+  };
+  let v = pick(obj);
+  if (v) return v;
+  for (const c of ["data","payload","draft","draft_data","meta","metadata","visit_data","extra"]) {
+    let d = obj[c];
+    if (typeof d === "string") { try { d = JSON.parse(d); } catch (_) { d = null; } }
+    v = pick(d);
+    if (v) return v;
+    if (d && typeof d.visit === "object") {
+      v = pick(d.visit);
+      if (v) return v;
+    }
+  }
+  return "—";
+}
+
+
 function reportAuditTable(rows){
   rows=asArray(rows,'audits');
   if(!rows.length)return '<p class="muted">Аудитов пока нет</p>';
