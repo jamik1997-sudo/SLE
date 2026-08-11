@@ -4,7 +4,7 @@ function mainNav(active='home'){
 }
 let newAuditOpenBusy=false;
 function renderHome(){
-  state.audits=state.audits.filter(a=>a.status!=='cancelled');
+  state.audits=asArray(state.audits,'audits').filter(a=>a&&a.status!=='cancelled');
   const drafts=state.audits.filter(a=>['draft','in_progress'].includes(a.status)&&a.is_mine!==false);
   shell(`${mainNav('home')}${drafts.length?`<div class="card accent"><h2>Черновики</h2>${drafts.map(d=>`<div class="visit-row"><span>${esc(d.employee_name)} · ${esc(d.region_name)}</span><span class="actions"><button class="btn primary small" data-resume="${d.id}">Продолжить</button></span></div>`).join('')}</div>`:''}<div class="card"><h2>Новый аудит</h2><p class="muted">Оценка сотрудника по пяти торговым точкам</p><button class="btn primary" id="newAudit">Начать</button></div><div class="card"><h2>Последние аудиты</h2>${auditTable(state.audits.slice(0,8))}</div>`);
   bindNav();
@@ -18,19 +18,22 @@ function renderHome(){
 }
 async function home(){
   const pageId=beginPage();
-  if(!state.audits.length){try{state.audits=JSON.parse(localStorage.getItem('sle_audits_cache')||'[]')}catch{}}
-  renderHome();
+  state.audits=asArray(state.audits,'audits');
+  if(!state.audits.length)state.audits=readCachedArray('sle_audits_cache');
+  try{renderHome()}catch(e){console.error('Home render error',e);state.audits=[];showPageError('Не удалось открыть главное меню','Данные аудитов имеют неверный формат. Нажмите «Повторить».');return}
   try{
-    const fresh=await api('/audits?limit=30');
+    const response=await api('/audits?limit=30');
     if(!isCurrentPage(pageId))return;
+    const fresh=asArray(response,'audits');
+    if(!Array.isArray(response)&&!fresh.length)console.warn('Unexpected /audits payload',response);
     state.audits=fresh;
     localStorage.setItem('sle_audits_cache',JSON.stringify(fresh));
-    const activeIds=new Set(fresh.filter(a=>['draft','in_progress'].includes(a.status)).map(a=>a.id));
+    const activeIds=new Set(fresh.filter(a=>a&&['draft','in_progress'].includes(a.status)).map(a=>a.id));
     for(let i=localStorage.length-1;i>=0;i--){
       const key=localStorage.key(i);
       if(key?.startsWith('sle_draft_')&&!activeIds.has(key.slice('sle_draft_'.length)))localStorage.removeItem(key);
     }
-    renderHome();
+    try{renderHome()}catch(e){console.error('Home refresh render error',e);toast('Не удалось отобразить список аудитов')}
   }catch(e){if(!state.audits.length)toast(e.message)}
 }
 
@@ -45,7 +48,7 @@ async function deleteAudit(id){
   if(!confirm('Удалить аудит без возможности восстановления?'))return;
   try{
     await api(`/audits/${id}`,{method:'DELETE'});
-    state.audits=state.audits.filter(a=>a.id!==id);
+    state.audits=asArray(state.audits,'audits').filter(a=>a&&a.id!==id);
     localStorage.setItem('sle_audits_cache',JSON.stringify(state.audits));
     toast('Аудит удалён');
     const active=document.querySelector('[data-page].active')?.dataset.page;
@@ -65,7 +68,7 @@ async function logsPage(limit=50,{append=false}={}){
   const existing=$('#logsRoot');
   if(!existing)loadingPage('logs','Журнал действий');else existing.classList.add('section-loading');
   let rows;
-  try{rows=await api(`/extras/logs?limit=${limit}`,{force:append})}catch(e){existing?.classList.remove('section-loading');return toast(e.message)}
+  try{rows=asArray(await api(`/extras/logs?limit=${limit}`,{force:append}),'logs')}catch(e){existing?.classList.remove('section-loading');return toast(e.message)}
   if(!isCurrentPage(pageId))return;
   const table=`<div class="table-wrap"><table class="table"><tr><th>Дата</th><th>Пользователь</th><th>Действие</th><th>Детали</th></tr>${rows.map(x=>`<tr><td>${esc(formatTashkentDateTime(x.created_at))}</td><td>${esc(x.user)}</td><td>${esc(x.action)}</td><td>${esc(x.details||'—')}</td></tr>`).join('')}</table></div>`;
   if(!existing){
@@ -79,7 +82,7 @@ async function logsPage(limit=50,{append=false}={}){
 async function settingsPage(){
   if(state.me.role!=='admin')return home();
   try{
-    const [questions,score]=await Promise.all([api('/extras/question-settings',{force:true}),api('/extras/score-settings',{force:true})]);
+    let [questions,score]=await Promise.all([api('/extras/question-settings',{force:true}),api('/extras/score-settings',{force:true})]);questions=asArray(questions,'questions');
     shell(`${mainNav('settings')}<div class="card"><h1>Настройки оценки</h1><form id="scoreSettings" class="grid two"><div class="field"><label>Уверенный от, %</label><input name="confident_min" type="number" min="1" max="99" value="${score.confident_min}" required></div><div class="field"><label>Мастер от, %</label><input name="master_min" type="number" min="1" max="100" value="${score.master_min}" required></div><button class="btn primary">Сохранить уровни</button></form></div><div class="card"><h2>Вопросы</h2><div class="table-wrap"><table class="table"><tr><th>Раздел</th><th>Вопрос</th><th>Вес</th><th>Активен</th><th></th></tr>${questions.map(q=>`<tr><td>${esc(q.section)}</td><td>${esc(q.text_ru)}</td><td>${q.weight}</td><td>${q.is_active?'Да':'Нет'}</td><td><button class="btn secondary small" data-edit-question="${q.key}">Изменить</button></td></tr>`).join('')}</table></div></div>`);
     bindNav();
     $('#scoreSettings').onsubmit=async e=>{e.preventDefault();try{await api('/extras/score-settings',{method:'PUT',body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});toast('Настройки сохранены')}catch(err){toast(err.message)}};

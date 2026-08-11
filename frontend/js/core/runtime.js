@@ -50,7 +50,7 @@ function getDeviceName(){
 const state={
   token:localStorage.getItem('sle_token')||'',
   theme:localStorage.getItem('sle_theme')||'light',
-  me:null,audits:[],questions:JSON.parse(localStorage.getItem('sle_questions')||'[]'),
+  me:null,audits:[],questions:readCachedArray('sle_questions'),
   audit:null,visit:0,step:0,regions:null,employees:new Map(),
   pendingAnswers:new Map(),pendingVisit:{},syncTimer:null,syncing:null,
   navigationBusy:false,navigationCooldownUntil:0,navigationCooldownTimer:null,
@@ -58,6 +58,26 @@ const state={
 };
 const $=(s,r=document)=>r.querySelector(s);
 const $$=(s,r=document)=>[...r.querySelectorAll(s)];
+
+// API/list safety: older caches, proxies or temporary error payloads may return
+// an object instead of an array. Never let a single malformed payload crash UI.
+function asArray(value,...preferredKeys){
+  if(Array.isArray(value))return value;
+  if(value&&typeof value==='object'){
+    for(const key of [...preferredKeys,'items','results','rows','data','audits']){
+      if(Array.isArray(value[key]))return value[key];
+    }
+  }
+  return [];
+}
+function readCachedArray(key){
+  try{return asArray(JSON.parse(localStorage.getItem(key)||'[]'))}catch{return []}
+}
+function showPageError(title='Не удалось загрузить страницу',message='Повторите попытку.'){
+  const safeTitle=esc(title),safeMessage=esc(message);
+  shell(`<div class="card"><h1>${safeTitle}</h1><p class="muted">${safeMessage}</p><button class="btn primary" id="retryPage">Повторить</button></div>`);
+  $('#retryPage')?.addEventListener('click',()=>home());
+}
 const requestCache=new Map();
 const inflightGets=new Map();
 function cacheTtl(path){

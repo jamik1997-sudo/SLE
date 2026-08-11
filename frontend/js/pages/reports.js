@@ -4,9 +4,9 @@ async function history(limit=50,{append=false}={}){
   if(!existing)loadingPage('history','Отчёты');
   else existing.classList.add('section-loading');
   let rows;
-  try{rows=await api(`/audits?limit=${limit}`,{force:append})}catch(e){existing?.classList.remove('section-loading');return toast(e.message)}
+  try{rows=asArray(await api(`/audits?limit=${limit}`,{force:append}),'audits')}catch(e){existing?.classList.remove('section-loading');return toast(e.message)}
   if(!isCurrentPage(pageId))return;
-  state.audits=rows;
+  state.audits=asArray(rows,'audits');
   if(!existing){
     shell(`${mainNav('history')}<div class="card" id="historyRoot"><div class="section-head"><div><h1>Отчёты</h1><p class="muted" id="historyCount">Показаны последние ${state.audits.length} аудитов</p></div></div><div class="actions"><button class="btn primary" id="exportExcel">Отчет по аудиту</button><button class="btn secondary" id="exportAnswers">Детальный отчет</button><button class="btn secondary" id="loadMoreAudits" ${state.audits.length<limit||limit>=500?'hidden':''}>Показать ещё</button></div><div id="reportTable" class="top-gap">${auditTable(state.audits)}</div></div>`);
     bindNav();
