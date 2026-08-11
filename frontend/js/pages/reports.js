@@ -1,3 +1,9 @@
+
+function reportAuditTable(rows){
+  rows=asArray(rows,'audits');
+  if(!rows.length)return '<p class="muted">Аудитов пока нет</p>';
+  return `<div class="table-wrap"><table class="table"><thead><tr><th>Дата</th><th>Сотрудник</th><th>Регион</th><th>Оценивающий</th><th>Статус</th><th>Результат</th><th>Цель визита</th><th>Комментарий</th></tr></thead><tbody>${rows.map(a=>`<tr data-open="${a.id}" class="clickable"><td>${esc(a.audit_date)}</td><td>${esc(a.employee_name)}</td><td>${esc(a.region_name)}</td><td>${esc(a.auditor_name||'—')}</td><td><span class="badge ${a.status==='completed'?'ok':'warn'}">${statusName(a.status)}</span></td><td>${a.total_percent==null?'—':a.total_percent+'%'}</td><td>${esc(a.visit_goals||'—')}</td><td>${esc(a.visit_comments||'—')}</td></tr>`).join('')}</tbody></table></div>`;
+}
 async function history(limit=50,{append=false}={}){
   const pageId=beginPage();
   const existing=$('#historyRoot');
@@ -8,14 +14,14 @@ async function history(limit=50,{append=false}={}){
   if(!isCurrentPage(pageId))return;
   state.audits=asArray(rows,'audits');
   if(!existing){
-    shell(`${mainNav('history')}<div class="card" id="historyRoot"><div class="section-head"><div><h1>Отчёты</h1><p class="muted" id="historyCount">Показаны последние ${state.audits.length} аудитов</p></div></div><div class="actions"><button class="btn primary" id="exportExcel">Отчет по аудиту</button><button class="btn secondary" id="exportAnswers">Детальный отчет</button><button class="btn secondary" id="loadMoreAudits" ${state.audits.length<limit||limit>=500?'hidden':''}>Показать ещё</button></div><div id="reportTable" class="top-gap">${auditTable(state.audits)}</div></div>`);
+    shell(`${mainNav('history')}<div class="card" id="historyRoot"><div class="section-head"><div><h1>Отчёты</h1><p class="muted" id="historyCount">Показаны последние ${state.audits.length} аудитов</p></div></div><div class="actions"><button class="btn primary" id="exportExcel">Отчет по аудиту</button><button class="btn secondary" id="exportAnswers">Детальный отчет</button><button class="btn secondary" id="loadMoreAudits" ${state.audits.length<limit||limit>=500?'hidden':''}>Показать ещё</button></div><div id="reportTable" class="top-gap">${reportAuditTable(state.audits)}</div></div>`);
     bindNav();
     $('#exportExcel').onclick=()=>downloadExcel('/extras/export/audit-report.xlsx','audit-report.xlsx');
     $('#exportAnswers').onclick=()=>downloadExcel('/extras/export/detailed-report.xlsx','detailed-audit-report.xlsx');
   }else{
     existing.classList.remove('section-loading');
     $('#historyCount').textContent=`Показаны последние ${state.audits.length} аудитов`;
-    $('#reportTable').innerHTML=auditTable(state.audits);
+    $('#reportTable').innerHTML=reportAuditTable(state.audits);
     bindNav();
   }
   const more=$('#loadMoreAudits');

@@ -217,11 +217,13 @@ def export_audits_xlsx(
     wb = Workbook()
     ws = wb.active
     ws.title = "Аудиты"
-    ws.append(["Дата", "Сотрудник", "Регион", "Оценивающий", "Статус", "Результат, %", "Уровень", "Торговые точки", "Координаты ТТ", "Начат", "Отправлен"])
+    ws.append(["Дата", "Сотрудник", "Регион", "Оценивающий", "Статус", "Результат, %", "Уровень", "Торговые точки", "Цель визита", "Комментарий", "Координаты ТТ", "Начат", "Отправлен"])
     status_names = {"draft":"Черновик", "in_progress":"В процессе", "completed":"Завершён"}
     for a in audits:
         shop_names = "; ".join(f"{v.visit_number}. {v.shop_code or '—'}" for v in a.visits)
         coordinates = "; ".join(f"{v.visit_number}. {v.latitude},{v.longitude}" for v in a.visits if v.latitude is not None and v.longitude is not None)
+        goals = "; ".join(f"{v.visit_number}. {(v.goal or '').strip()}" for v in sorted(a.visits, key=lambda x: x.visit_number) if (v.goal or '').strip())
+        comments = "; ".join(f"{v.visit_number}. {(v.comment or '').strip()}" for v in sorted(a.visits, key=lambda x: x.visit_number) if (v.comment or '').strip())
         ws.append([
             a.audit_date,
             a.employee.full_name if a.employee else "",
@@ -231,23 +233,25 @@ def export_audits_xlsx(
             a.total_percent,
             a.level or "",
             shop_names,
+            goals,
+            comments,
             coordinates,
             to_tashkent_naive(a.started_at),
             to_tashkent_naive(a.submitted_at),
         ])
     for cell in ws["A"][1:]: cell.number_format = "dd.mm.yyyy"
-    for col in (10, 11):
+    for col in (12, 13):
         for cell in ws.iter_cols(min_col=col, max_col=col, min_row=2):
             for c in cell: c.number_format = "dd.mm.yyyy hh:mm"
     _style_sheet(ws)
     loc = wb.create_sheet("Торговые точки")
-    loc.append(["ID аудита", "Дата", "Регион", "Сотрудник", "Оценивающий", "Визит", "Код ТТ", "Широта", "Долгота", "Координаты", "Ссылка на карту"])
+    loc.append(["ID аудита", "Дата", "Регион", "Сотрудник", "Оценивающий", "Визит", "Код ТТ", "Цель визита", "Комментарий", "Широта", "Долгота", "Координаты", "Ссылка на карту"])
     for a in audits:
         for v in a.visits:
             coords = f"{v.latitude},{v.longitude}" if v.latitude is not None and v.longitude is not None else ""
-            loc.append([a.id, a.audit_date, a.region.name if a.region else "", a.employee.full_name if a.employee else "", a.auditor.full_name if a.auditor else "", v.visit_number, v.shop_code, v.latitude, v.longitude, coords, f"https://maps.google.com/?q={coords}" if coords else ""])
+            loc.append([a.id, a.audit_date, a.region.name if a.region else "", a.employee.full_name if a.employee else "", a.auditor.full_name if a.auditor else "", v.visit_number, v.shop_code, v.goal or "", v.comment or "", v.latitude, v.longitude, coords, f"https://maps.google.com/?q={coords}" if coords else ""])
             if coords:
-                cell = loc.cell(loc.max_row, 11); cell.hyperlink = cell.value; cell.style = "Hyperlink"
+                cell = loc.cell(loc.max_row, 13); cell.hyperlink = cell.value; cell.style = "Hyperlink"
     _style_sheet(loc)
     return _xlsx_response(wb, "audit-report.xlsx")
 
@@ -274,7 +278,7 @@ def export_questionnaire_xlsx(
     wb = Workbook()
     ws = wb.active
     ws.title = "Детальный отчет"
-    ws.append(["ID аудита", "Дата", "Статус", "Регион", "Сотрудник", "Оценивающий", "Визит", "Код ТТ", "Широта", "Долгота", "Раздел", "Вопрос", "Ответ", "Обновлено"])
+    ws.append(["ID аудита", "Дата", "Статус", "Регион", "Сотрудник", "Оценивающий", "Визит", "Код ТТ", "Цель визита", "Комментарий визита", "Широта", "Долгота", "Раздел", "Вопрос", "Ответ", "Комментарий к ответу", "Обновлено"])
     status_names = {"draft":"Черновик", "in_progress":"В процессе", "completed":"Завершён"}
     for audit in audits:
         for answer in audit.answers:
@@ -289,11 +293,12 @@ def export_questionnaire_xlsx(
                 audit.id, audit.audit_date, status_names.get(audit.status.value, audit.status.value),
                 audit.region.name if audit.region else "", audit.employee.full_name if audit.employee else "",
                 audit.auditor.full_name if audit.auditor else "", answer.visit_number,
-                visit.shop_code if visit else "", visit.latitude if visit else None, visit.longitude if visit else None,
-                q.section, q.text_ru, answer.answer_value, to_tashkent_naive(answer.updated_at),
+                visit.shop_code if visit else "", visit.goal if visit else "", visit.comment if visit else "",
+                visit.latitude if visit else None, visit.longitude if visit else None,
+                q.section, q.text_ru, answer.answer_value, answer.comment or "", to_tashkent_naive(answer.updated_at),
             ])
     for cell in ws["B"][1:]: cell.number_format = "dd.mm.yyyy"
-    for cell in ws["N"][1:]: cell.number_format = "dd.mm.yyyy hh:mm"
+    for cell in ws["Q"][1:]: cell.number_format = "dd.mm.yyyy hh:mm"
     _style_sheet(ws)
 
     sm = wb.create_sheet("Сводка")

@@ -110,12 +110,29 @@ def list_audits(limit: int = 100, db: Session = Depends(get_db), user: User = De
     purge_stale_drafts(db)
     stmt = select(Audit).options(
         joinedload(Audit.employee), joinedload(Audit.region),
-        joinedload(Audit.auditor), joinedload(Audit.leader)
+        joinedload(Audit.auditor), joinedload(Audit.leader), selectinload(Audit.visits)
     ).where(Audit.status != AuditStatus.cancelled).order_by(Audit.last_saved_at.desc())
     if user.role == Role.leader:
         stmt = stmt.where(Audit.region_id.in_(allowed_regions(user)))
     rows = db.scalars(stmt.limit(min(max(limit, 1), 500))).all()
-    return [{"id":a.id,"audit_date":a.audit_date,"status":a.status.value,"current_visit":a.current_visit,"current_step":a.current_step,"total_percent":a.total_percent,"level":a.level,"employee_name":a.employee.full_name,"region_name":a.region.name,"last_saved_at":a.last_saved_at,"auditor_id":a.auditor_id,"auditor_name":a.auditor.full_name,"leader_id":a.leader_id,"leader_name":a.leader.full_name if a.leader else a.auditor.full_name,"is_mine":a.auditor_id == user.id} for a in rows]
+    return [{
+        "id": a.id, "audit_date": a.audit_date, "status": a.status.value,
+        "current_visit": a.current_visit, "current_step": a.current_step,
+        "total_percent": a.total_percent, "level": a.level,
+        "employee_name": a.employee.full_name, "region_name": a.region.name,
+        "last_saved_at": a.last_saved_at, "auditor_id": a.auditor_id,
+        "auditor_name": a.auditor.full_name, "leader_id": a.leader_id,
+        "leader_name": a.leader.full_name if a.leader else a.auditor.full_name,
+        "is_mine": a.auditor_id == user.id,
+        "visit_goals": "; ".join(
+            f"{v.visit_number}. {v.goal.strip()}" for v in sorted(a.visits, key=lambda x: x.visit_number)
+            if (v.goal or "").strip()
+        ),
+        "visit_comments": "; ".join(
+            f"{v.visit_number}. {v.comment.strip()}" for v in sorted(a.visits, key=lambda x: x.visit_number)
+            if (v.comment or "").strip()
+        ),
+    } for a in rows]
 
 
 @router.delete("/{audit_id}")
