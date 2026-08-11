@@ -259,3 +259,190 @@ async function dashboard(filters={},opts={}){
     bindCompletedVisitRows(results);
   }
 }
+
+
+function comparisonAnswerLabel(v){
+  const s=String(v??'').toUpperCase();
+  if(s==='1')return '1 — выполнено';
+  if(s==='0')return '0 — не выполнено';
+  if(s==='NA'||s==='N/A')return 'N/A — не применимо';
+  return s||'—';
+}
+function comparisonDeltaBadge(delta){
+  if(delta==null)return '<span class="badge">—</span>';
+  if(delta>0)return `<span class="badge ok">↑ +${delta}%</span>`;
+  if(delta<0)return `<span class="badge warn">↓ ${delta}%</span>`;
+  return '<span class="badge">= 0%</span>';
+}
+function comparisonStatusLabel(s){
+  return ({
+    improved:'↑ Улучшено',
+    worsened:'↓ Ухудшено',
+    unchanged:'= Без изменений',
+    changed:'Изменено'
+  })[s]||s;
+}
+
+async function comparisonPage(){
+  if(!['admin','manager','auditor'].includes(state.me?.role))return home();
+  const pageId=beginPage();
+  loadingPage('comparison','Сравнение визитов');
+  let options;
+  try{options=await api('/audits/comparison/options',{force:true})}
+  catch(e){return toast(e.message)}
+  if(!isCurrentPage(pageId))return;
+
+  state.comparisonOptions=options;
+  shell(`${mainNav('comparison')}
+    <div class="dashboard-head"><div><h1>Сравнение визитов</h1>
+    <p class="muted">История и детальное сравнение посещений одной торговой точки</p></div></div>
+    <div class="card">
+      <div class="grid four">
+        <div class="field"><label>Регион</label><select id="cmpRegion">
+          <option value="">Все регионы</option>
+          ${(options.regions||[]).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('')}
+        </select></div>
+        <div class="field"><label>Код ТТ</label><select id="cmpPoint"><option value="">Выберите ТТ</option></select></div>
+        <div class="field"><label>Дата с</label><input id="cmpFrom" type="date"></div>
+        <div class="field"><label>Дата по</label><input id="cmpTo" type="date"></div>
+      </div>
+      <div class="actions top-gap"><button class="btn primary" id="cmpLoad">Показать историю</button></div>
+    </div>
+    <div id="cmpHistory"></div>
+    <div id="cmpDetail"></div>`);
+  bindNav();
+
+  const region=$('#cmpRegion'),point=$('#cmpPoint');
+  const refreshPoints=()=>{
+    const rid=region.value;
+    const pts=(options.points||[]).filter(x=>!rid||x.region_id===rid);
+    const current=point.value;
+    point.innerHTML='<option value="">Выберите ТТ</option>'+pts.map(x=>`<option value="${esc(x.shop_code)}">${esc(x.shop_code)} · ${esc(x.region_name)}</option>`).join('');
+    if([...point.options].some(o=>o.value===current))point.value=current;
+  };
+  refreshPoints();
+  region.onchange=refreshPoints;
+  $('#cmpLoad').onclick=()=>loadComparisonHistory();
+}
+
+async function loadComparisonHistory(){
+  const shop=$('#cmpPoint')?.value||'';
+  if(!shop)return toast('Выберите код ТТ');
+  const qs=new URLSearchParams({shop_code:shop});
+  const rid=$('#cmpRegion')?.value||'';
+  const df=$('#cmpFrom')?.value||'';
+  const dt=$('#cmpTo')?.value||'';
+  if(rid)qs.set('region_id',rid);
+  if(df)qs.set('date_from',df);
+  if(dt)qs.set('date_to',dt);
+
+  const historyRoot=$('#cmpHistory');
+  historyRoot.innerHTML='<div class="card section-loading"><p class="muted">Загрузка истории…</p></div>';
+  let data;
+  try{data=await api('/audits/comparison/history?'+qs.toString(),{force:true})}
+  catch(e){historyRoot.innerHTML='';return toast(e.message)}
+  const rows=asArray(data?.visits,'visits');
+
+  if(!rows.length){
+    historyRoot.innerHTML='<div class="card"><p class="muted">По этой ТТ завершённых визитов не найдено</p></div>';
+    $('#cmpDetail').innerHTML='';
+    return;
+  }
+  state.comparisonVisits=rows;
+
+  historyRoot.innerHTML=`<div class="card">
+    <div class="section-head"><div><h2>История ТТ ${esc(data.shop_code)}</h2>
+    <p class="muted">${rows.length} завершённых визитов</p></div></div>
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th></th><th>Дата</th><th>Сотрудник</th><th>Оценивающий</th><th>Результат ТТ</th><th>Изменение</th><th>Цель визита</th></tr></thead>
+      <tbody>${rows.map((x,i)=>`<tr>
+        <td><input type="checkbox" class="cmp-select" data-index="${i}" aria-label="Выбрать визит"></td>
+        <td>${esc(x.audit_date)}</td><td>${esc(x.employee_name)}</td><td>${esc(x.auditor_name)}</td>
+        <td><strong>${x.point_percent}%</strong></td><td>${comparisonDeltaBadge(x.delta)}</td><td>${esc(x.goal||'—')}</td>
+      </tr>`).join('')}</tbody></table></div>
+    <div class="actions top-gap">
+      <button class="btn primary" id="cmpCompare" disabled>Сравнить выбранные</button>
+      <span class="muted">Выберите ровно 2 визита</span>
+    </div>
+    <div class="top-gap">
+      <h3>Динамика результата</h3>
+      ${rows.map(x=>`<div class="stat-row"><div class="stat-label"><span>${esc(x.audit_date)} · ${esc(x.auditor_name)}</span><strong>${x.point_percent}%</strong></div><div class="bar"><i style="width:${Math.max(0,Math.min(100,x.point_percent))}%"></i></div></div>`).join('')}
+    </div>
+  </div>`;
+
+  const boxes=$$('.cmp-select');
+  const update=()=>{
+    const checked=boxes.filter(b=>b.checked);
+    if(checked.length>2){
+      checked[checked.length-1].checked=false;
+      return update();
+    }
+    $('#cmpCompare').disabled=checked.length!==2;
+  };
+  boxes.forEach(b=>b.onchange=update);
+  $('#cmpCompare').onclick=()=>{
+    const idxs=boxes.filter(b=>b.checked).map(b=>Number(b.dataset.index)).sort((a,b)=>a-b);
+    if(idxs.length!==2)return;
+    loadComparisonDetail(rows[idxs[0]],rows[idxs[1]]);
+  };
+}
+
+async function loadComparisonDetail(left,right){
+  const root=$('#cmpDetail');
+  root.innerHTML='<div class="card section-loading"><p class="muted">Детальное сравнение…</p></div>';
+  const qs=new URLSearchParams({
+    left_audit_id:left.audit_id,left_visit_number:left.visit_number,
+    right_audit_id:right.audit_id,right_visit_number:right.visit_number
+  });
+  let d;
+  try{d=await api('/audits/comparison/detail?'+qs.toString(),{force:true})}
+  catch(e){root.innerHTML='';return toast(e.message)}
+
+  const s=d.summary||{};
+  root.innerHTML=`<div class="card">
+    <div class="section-head"><div><h2>Детальное сравнение · ${esc(d.shop_code)}</h2>
+    <p class="muted">${esc(d.left.audit_date)} ↔ ${esc(d.right.audit_date)}</p></div></div>
+    <div class="kpi-grid">
+      <div class="kpi"><div><span>Было</span><strong>${d.left.point_percent}%</strong><small>${esc(d.left.audit_date)}</small></div></div>
+      <div class="kpi"><div><span>Стало</span><strong>${d.right.point_percent}%</strong><small>${esc(d.right.audit_date)}</small></div></div>
+      <div class="kpi"><div><span>Изменение</span><strong>${s.delta>0?'+':''}${s.delta}%</strong><small>по результату ТТ</small></div></div>
+      <div class="kpi"><div><span>Улучшено</span><strong>${s.improved||0}</strong><small>вопросов</small></div></div>
+      <div class="kpi"><div><span>Ухудшено</span><strong>${s.worsened||0}</strong><small>вопросов</small></div></div>
+      <div class="kpi"><div><span>Проблема осталась</span><strong>${s.unresolved||0}</strong><small>0 → 0</small></div></div>
+    </div>
+    <div class="grid two top-gap">
+      <div><b>Первый визит:</b> ${esc(d.left.auditor_name)} · ${esc(d.left.employee_name)}<br><b>Цель:</b> ${esc(d.left.goal)}<br><b>Комментарий:</b> ${esc(d.left.comment)}</div>
+      <div><b>Второй визит:</b> ${esc(d.right.auditor_name)} · ${esc(d.right.employee_name)}<br><b>Цель:</b> ${esc(d.right.goal)}<br><b>Комментарий:</b> ${esc(d.right.comment)}</div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Сравнение по блокам</h2>
+    <div class="table-wrap"><table class="table"><thead><tr><th>Блок</th><th>${esc(d.left.audit_date)}</th><th>${esc(d.right.audit_date)}</th><th>Изменение</th></tr></thead>
+    <tbody>${asArray(d.blocks,'blocks').map(x=>`<tr><td>${esc(x.name)}</td><td>${x.left_percent}%</td><td>${x.right_percent}%</td><td>${comparisonDeltaBadge(x.delta)}</td></tr>`).join('')}</tbody></table></div>
+  </div>
+  <div class="card">
+    <div class="section-head"><div><h2>Сравнение каждого вопроса</h2></div>
+      <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="cmpOnlyChanges"> Только изменения</label>
+    </div>
+    <div class="table-wrap"><table class="table"><thead><tr><th>Шаг / раздел</th><th>Вопрос</th><th>${esc(d.left.audit_date)}</th><th>${esc(d.right.audit_date)}</th><th>Статус</th><th>Комментарий 1</th><th>Комментарий 2</th></tr></thead>
+    <tbody id="cmpQuestionRows">${comparisonQuestionRows(d.questions,false)}</tbody></table></div>
+  </div>`;
+  $('#cmpOnlyChanges').onchange=e=>{
+    $('#cmpQuestionRows').innerHTML=comparisonQuestionRows(d.questions,e.target.checked);
+  };
+}
+
+function comparisonQuestionRows(rows,onlyChanges){
+  rows=asArray(rows,'questions');
+  if(onlyChanges)rows=rows.filter(x=>x.status!=='unchanged');
+  if(!rows.length)return '<tr><td colspan="7" class="muted">Изменений нет</td></tr>';
+  return rows.map(x=>`<tr class="cmp-${x.status}">
+    <td>Шаг ${x.step}<br><span class="muted">${esc(x.section)}</span></td>
+    <td>${esc(x.text)}</td>
+    <td><strong>${esc(comparisonAnswerLabel(x.left_value))}</strong></td>
+    <td><strong>${esc(comparisonAnswerLabel(x.right_value))}</strong></td>
+    <td>${esc(comparisonStatusLabel(x.status))}</td>
+    <td>${esc(x.left_comment||'—')}</td>
+    <td>${esc(x.right_comment||'—')}</td>
+  </tr>`).join('');
+}

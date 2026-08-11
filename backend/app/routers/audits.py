@@ -513,6 +513,325 @@ def dashboard(
     return set_cache(cache_key, result, ttl=60)
 
 
+
+def _comparison_allowed(user: User):
+    if user.role not in (Role.admin, Role.manager, Role.auditor):
+        raise HTTPException(403, "Раздел сравнения доступен только администратору, менеджеру и аудитору")
+
+
+def _question_catalog(db: Session):
+    rows = db.scalars(
+        select(QuestionSetting)
+        .where(QuestionSetting.is_active == True)
+        .order_by(QuestionSetting.sort_order)
+    ).all()
+    if rows:
+        return [{
+            "key": q.key,
+            "section": q.section,
+            "step": q.step,
+            "text": q.text_ru,
+            "weight": float(q.weight or 0),
+            "sort_order": q.sort_order,
+        } for q in rows if q.step not in (0, 8)]
+    return [{
+        "key": q["key"],
+        "section": q["section"],
+        "step": q["step"],
+        "text": q["text"],
+        "weight": float(q.get("weight", 0) or 0),
+        "sort_order": i,
+    } for i, q in enumerate(QUESTIONS) if q["step"] not in (0, 8)]
+
+
+def _visit_block_scores(answers, qmap):
+    aliases = {
+        "Подготовка к визиту": "Подготовка",
+        "Вступление": "Представление",
+        "Осмотр": "Осмотр",
+        "Презентация": "Предложение",
+        "Работа с возражениями": "Предложение",
+        "Работа в точке": "Работа в точке",
+        "Обучение персонала": "Работа в точке",
+        "Завершение визита": "Завершение визита",
+        "Анализ визита": "Анализ визита",
+    }
+    blocks = {}
+    earned = possible = 0.0
+    for a in answers:
+        q = qmap.get(a.question_key)
+        if not q:
+            continue
+        value = str(a.answer_value or "").upper()
+        if value in ("NA", "N/A"):
+            continue
+        name = aliases.get(q["section"], q["section"])
+        b = blocks.setdefault(name, {"earned": 0.0, "possible": 0.0})
+        w = float(q["weight"] or 0)
+        if value in ("0", "1"):
+            b["possible"] += w
+            possible += w
+            if value == "1":
+                b["earned"] += w
+                earned += w
+    block_rows = [{
+        "name": name,
+        "percent": round(v["earned"] / v["possible"] * 100, 1) if v["possible"] else 0
+    } for name, v in blocks.items()]
+    total = round(earned / possible * 100, 1) if possible else 0
+    return total, block_rows
+
+
+@router.get("/comparison/options")
+def comparison_options(
+    region_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    _comparison_allowed(user)
+
+    region_stmt = select(Region).where(Region.is_active == True).order_by(Region.name)
+    regions = db.scalars(region_stmt).all()
+
+    points_stmt = (
+        select(Visit.shop_code, Audit.region_id, Region.name.label("region_name"))
+        .join(Audit, Audit.id == Visit.audit_id)
+        .join(Region, Region.id == Audit.region_id)
+        .where(
+            Audit.status == AuditStatus.completed,
+            Visit.shop_code.is_not(None),
+            Visit.shop_code != "",
+        )
+        .distinct()
+        .order_by(Region.name, Visit.shop_code)
+    )
+    if region_id:
+        points_stmt = points_stmt.where(Audit.region_id == region_id)
+
+    point_rows = db.execute(points_stmt).all()
+    return {
+        "regions": [{"id": r.id, "name": r.name} for r in regions],
+        "points": [{
+            "shop_code": row.shop_code,
+            "region_id": row.region_id,
+            "region_name": row.region_name,
+        } for row in point_rows],
+    }
+
+
+@router.get("/comparison/history")
+def comparison_history(
+    shop_code: str,
+    region_id: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    _comparison_allowed(user)
+    code = (shop_code or "").strip()
+    if not code:
+        raise HTTPException(422, "Необходимо выбрать код ТТ")
+
+    stmt = (
+        select(Audit, Visit)
+        .join(Visit, Visit.audit_id == Audit.id)
+        .options(
+            joinedload(Audit.employee),
+            joinedload(Audit.auditor),
+            joinedload(Audit.region),
+            selectinload(Audit.answers),
+        )
+        .where(
+            Audit.status == AuditStatus.completed,
+            Visit.shop_code == code,
+        )
+        .order_by(Audit.audit_date.asc(), Audit.submitted_at.asc())
+    )
+    if region_id:
+        stmt = stmt.where(Audit.region_id == region_id)
+    if date_from:
+        stmt = stmt.where(Audit.audit_date >= date_from)
+    if date_to:
+        stmt = stmt.where(Audit.audit_date <= date_to)
+
+    pairs = db.execute(stmt).all()
+    questions = _question_catalog(db)
+    qmap = {q["key"]: q for q in questions}
+
+    result = []
+    for audit, visit in pairs:
+        visit_answers = [a for a in audit.answers if a.visit_number == visit.visit_number]
+        point_percent, blocks = _visit_block_scores(visit_answers, qmap)
+        timing = db.scalar(
+            select(VisitTiming).where(
+                VisitTiming.audit_id == audit.id,
+                VisitTiming.visit_number == visit.visit_number,
+            )
+        )
+        from app.timezone_utils import to_tashkent_naive
+        started_local = to_tashkent_naive(timing.started_at) if timing and timing.started_at else None
+
+        result.append({
+            "audit_id": audit.id,
+            "visit_number": visit.visit_number,
+            "audit_date": audit.audit_date,
+            "visit_started_at": started_local.isoformat() if started_local else None,
+            "employee_name": audit.employee.full_name,
+            "auditor_name": audit.auditor.full_name,
+            "region_id": audit.region_id,
+            "region_name": audit.region.name,
+            "shop_code": visit.shop_code,
+            "goal": (visit.goal or "").strip() or "—",
+            "comment": (visit.comment or "").strip() or "—",
+            "latitude": visit.latitude,
+            "longitude": visit.longitude,
+            "point_percent": point_percent,
+            "audit_percent": audit.total_percent,
+            "level": audit.level,
+            "blocks": blocks,
+        })
+
+    previous = None
+    for row in result:
+        row["delta"] = None if previous is None else round(row["point_percent"] - previous, 1)
+        previous = row["point_percent"]
+
+    return {"shop_code": code, "visits": result}
+
+
+@router.get("/comparison/detail")
+def comparison_detail(
+    left_audit_id: str,
+    left_visit_number: int,
+    right_audit_id: str,
+    right_visit_number: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    _comparison_allowed(user)
+
+    left_audit = load_audit(db, left_audit_id)
+    right_audit = load_audit(db, right_audit_id)
+    if left_audit.status != AuditStatus.completed or right_audit.status != AuditStatus.completed:
+        raise HTTPException(400, "Сравнивать можно только завершённые визиты")
+
+    left_visit = next((v for v in left_audit.visits if v.visit_number == left_visit_number), None)
+    right_visit = next((v for v in right_audit.visits if v.visit_number == right_visit_number), None)
+    if not left_visit or not right_visit:
+        raise HTTPException(404, "Один из визитов не найден")
+    if (left_visit.shop_code or "").strip() != (right_visit.shop_code or "").strip():
+        raise HTTPException(422, "Для детального сравнения выберите визиты одной ТТ")
+
+    questions = _question_catalog(db)
+    qmap = {q["key"]: q for q in questions}
+    left_map = {a.question_key: a for a in left_audit.answers if a.visit_number == left_visit_number}
+    right_map = {a.question_key: a for a in right_audit.answers if a.visit_number == right_visit_number}
+
+    left_total, left_blocks = _visit_block_scores(list(left_map.values()), qmap)
+    right_total, right_blocks = _visit_block_scores(list(right_map.values()), qmap)
+    left_block_map = {x["name"]: x["percent"] for x in left_blocks}
+    right_block_map = {x["name"]: x["percent"] for x in right_blocks}
+
+    aliases = {
+        "Подготовка к визиту": "Подготовка",
+        "Вступление": "Представление",
+        "Осмотр": "Осмотр",
+        "Презентация": "Предложение",
+        "Работа с возражениями": "Предложение",
+        "Работа в точке": "Работа в точке",
+        "Обучение персонала": "Работа в точке",
+        "Завершение визита": "Завершение визита",
+        "Анализ визита": "Анализ визита",
+    }
+
+    question_rows = []
+    improved = worsened = unchanged = unresolved = 0
+    for q in questions:
+        la = left_map.get(q["key"])
+        ra = right_map.get(q["key"])
+        lv = str(la.answer_value).upper() if la and la.answer_value is not None else "—"
+        rv = str(ra.answer_value).upper() if ra and ra.answer_value is not None else "—"
+
+        if lv in ("NA", "N/A"):
+            lv = "NA"
+        if rv in ("NA", "N/A"):
+            rv = "NA"
+
+        status = "unchanged"
+        if lv == "0" and rv == "1":
+            status = "improved"; improved += 1
+        elif lv == "1" and rv == "0":
+            status = "worsened"; worsened += 1
+        elif lv == rv:
+            unchanged += 1
+            if rv == "0":
+                unresolved += 1
+        else:
+            # Changes involving N/A / missing values are shown but not treated as score improvement.
+            status = "changed"
+
+        question_rows.append({
+            "question_key": q["key"],
+            "step": q["step"],
+            "section": q["section"],
+            "block": aliases.get(q["section"], q["section"]),
+            "text": q["text"],
+            "left_value": lv,
+            "right_value": rv,
+            "left_comment": (la.comment or "—") if la else "—",
+            "right_comment": (ra.comment or "—") if ra else "—",
+            "status": status,
+        })
+
+    block_names = list(dict.fromkeys(
+        [x["name"] for x in left_blocks] + [x["name"] for x in right_blocks]
+    ))
+    blocks = [{
+        "name": name,
+        "left_percent": left_block_map.get(name, 0),
+        "right_percent": right_block_map.get(name, 0),
+        "delta": round(right_block_map.get(name, 0) - left_block_map.get(name, 0), 1),
+    } for name in block_names]
+
+    return {
+        "shop_code": left_visit.shop_code,
+        "left": {
+            "audit_id": left_audit.id,
+            "visit_number": left_visit_number,
+            "audit_date": left_audit.audit_date,
+            "employee_name": left_audit.employee.full_name,
+            "auditor_name": left_audit.auditor.full_name,
+            "region_name": left_audit.region.name,
+            "goal": (left_visit.goal or "").strip() or "—",
+            "comment": (left_visit.comment or "").strip() or "—",
+            "point_percent": left_total,
+        },
+        "right": {
+            "audit_id": right_audit.id,
+            "visit_number": right_visit_number,
+            "audit_date": right_audit.audit_date,
+            "employee_name": right_audit.employee.full_name,
+            "auditor_name": right_audit.auditor.full_name,
+            "region_name": right_audit.region.name,
+            "goal": (right_visit.goal or "").strip() or "—",
+            "comment": (right_visit.comment or "").strip() or "—",
+            "point_percent": right_total,
+        },
+        "summary": {
+            "delta": round(right_total - left_total, 1),
+            "improved": improved,
+            "worsened": worsened,
+            "unchanged": unchanged,
+            "unresolved": unresolved,
+        },
+        "blocks": blocks,
+        "questions": question_rows,
+    }
+
+
+
+
 @router.post("")
 def create_audit(payload: AuditCreate, db: Session = Depends(get_db), user: User = Depends(current_user)):
     purge_stale_drafts(db)
