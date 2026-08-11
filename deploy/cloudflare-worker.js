@@ -1,12 +1,14 @@
 const FRONTEND_ORIGIN = "https://sle-xi.vercel.app";
-const ORIGIN = "http://129.225.120.100";
+const ORIGIN = "https://sle-audit.duckdns.org";
 
 function corsHeaders(request) {
-  const requested = request.headers.get("Access-Control-Request-Headers");
+  const requestOrigin = request.headers.get("Origin") || "";
+  const allowOrigin = requestOrigin === FRONTEND_ORIGIN ? FRONTEND_ORIGIN : FRONTEND_ORIGIN;
+
   return {
-    "Access-Control-Allow-Origin": FRONTEND_ORIGIN,
+    "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
-    "Access-Control-Allow-Headers": requested || "Authorization,Content-Type,X-Device-ID",
+    "Access-Control-Allow-Headers": "Authorization,Content-Type,X-Device-ID",
     "Access-Control-Allow-Credentials": "true",
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin, Access-Control-Request-Headers",
@@ -16,26 +18,42 @@ function corsHeaders(request) {
 export default {
   async fetch(request) {
     const cors = corsHeaders(request);
+
     if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: cors });
+      return new Response(null, {
+        status: 204,
+        headers: cors,
+      });
     }
 
     try {
-      const incomingUrl = new URL(request.url);
-      const targetUrl = new URL(incomingUrl.pathname + incomingUrl.search, ORIGIN);
-      const headers = new Headers(request.headers);
-      // Host выставит fetch сам. Явная подмена иногда ломает проксирование.
-      headers.delete("host");
+      const incoming = new URL(request.url);
+      const target = new URL(incoming.pathname + incoming.search, ORIGIN);
 
-      const response = await fetch(targetUrl.toString(), {
+      const headers = new Headers(request.headers);
+      headers.delete("host");
+      headers.delete("cf-connecting-ip");
+      headers.delete("cf-ray");
+      headers.delete("cf-visitor");
+
+      const init = {
         method: request.method,
         headers,
-        body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body,
         redirect: "follow",
-      });
+      };
 
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        init.body = request.body;
+      }
+
+      const response = await fetch(target.toString(), init);
       const responseHeaders = new Headers(response.headers);
-      for (const [key, value] of Object.entries(cors)) responseHeaders.set(key, value);
+
+      for (const [key, value] of Object.entries(cors)) {
+        responseHeaders.set(key, value);
+      }
+
+      responseHeaders.set("Cache-Control", "no-store");
 
       return new Response(response.body, {
         status: response.status,
@@ -43,12 +61,20 @@ export default {
         headers: responseHeaders,
       });
     } catch (error) {
-      return new Response(JSON.stringify({
-        detail: "Сервер временно недоступен. Повторите попытку через несколько секунд."
-      }), {
-        status: 502,
-        headers: { "Content-Type": "application/json; charset=utf-8", ...cors },
-      });
+      return new Response(
+        JSON.stringify({
+          detail: "Backend temporarily unavailable",
+          error: String(error?.message || error),
+        }),
+        {
+          status: 502,
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+            "Cache-Control": "no-store",
+            ...cors,
+          },
+        }
+      );
     }
   },
 };
