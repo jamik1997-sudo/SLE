@@ -5,6 +5,6 @@
 - GET-запросы: максимум 2 попытки, таймауты 8/12 секунд.
 - Пул Supabase: 3 постоянных + 2 резервных соединения.
 - Полный PWA-кеш JS-модулей и корректное версионирование 4.0.0.
-- Backend URL: `https://sle-audit.duckdns.org`.
+- Backend URL: `https://sle-api.jamik1997.workers.dev`.
 
 После deploy один раз удалите старый Service Worker и очистите данные сайта.

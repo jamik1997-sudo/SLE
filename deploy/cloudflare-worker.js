@@ -1,5 +1,5 @@
 const FRONTEND_ORIGIN = "https://sle-xi.vercel.app";
-const ORIGIN = "https://sle-audit.duckdns.org";
+const ORIGIN = "http://129.225.120.100";
 
 function corsHeaders(request) {
   const requested = request.headers.get("Access-Control-Request-Headers");
