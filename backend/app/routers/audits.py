@@ -816,63 +816,91 @@ def submit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(cu
 @router.get("/{audit_id}/visit-view")
 def audit_visit_view(
     audit_id: str,
-    visit_id: str | None = None,
+    visit_number: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    user: User = Depends(current_user),
 ):
-    audit = (
-        db.query(Audit)
-        .options(
-            selectinload(Audit.answers),
-            selectinload(Audit.visits),
-            joinedload(Audit.employee),
-            joinedload(Audit.auditor),
-            joinedload(Audit.region),
-        )
-        .filter(Audit.id == audit_id)
-        .first()
-    )
-    if not audit:
-        raise HTTPException(status_code=404, detail="Аудит не найден")
+    """Readonly questionnaire for one completed visit shown from Dashboard."""
+    audit = load_audit(db, audit_id)
+    ensure_access(user, audit)
 
-    if getattr(current_user, "role", None) == Role.leader:
-        if str(getattr(audit, "region_id", "")) != str(getattr(current_user, "region_id", "")):
-            raise HTTPException(status_code=403, detail="Нет доступа")
+    if audit.status != AuditStatus.completed:
+        raise HTTPException(400, "Просмотр доступен только для завершённого аудита")
 
-    visits = list(getattr(audit, "visits", []) or [])
-    selected_visit = None
-    if visit_id:
-        selected_visit = next((v for v in visits if str(getattr(v, "id", "")) == str(visit_id)), None)
-    if selected_visit is None and visits:
-        selected_visit = visits[0]
+    visit = next((v for v in audit.visits if v.visit_number == visit_number), None)
+    if not visit:
+        raise HTTPException(404, "Визит не найден")
 
-    answers = []
-    for a in list(getattr(audit, "answers", []) or []):
-        av_id = getattr(a, "visit_id", None)
-        if selected_visit is not None and av_id is not None and str(av_id) != str(getattr(selected_visit, "id", "")):
+    settings = db.scalars(
+        select(QuestionSetting)
+        .where(QuestionSetting.is_active == True)
+        .order_by(QuestionSetting.sort_order)
+    ).all()
+
+    if settings:
+        questions = [{
+            "key": q.key,
+            "section": q.section,
+            "step": q.step,
+            "text": q.text_ru,
+            "sort_order": q.sort_order,
+        } for q in settings if q.step not in (0, 8)]
+    else:
+        questions = [{
+            "key": q["key"],
+            "section": q["section"],
+            "step": q["step"],
+            "text": q["text"],
+            "sort_order": i,
+        } for i, q in enumerate(QUESTIONS) if q["step"] not in (0, 8)]
+
+    answer_map = {
+        a.question_key: a
+        for a in audit.answers
+        if a.visit_number == visit_number
+    }
+
+    rows = []
+    for q in questions:
+        answer = answer_map.get(q["key"])
+        if answer is None:
             continue
-        answers.append({
-            "question_id": getattr(a, "question_id", None),
-            "value": getattr(a, "value", getattr(a, "answer", None)),
-            "comment": getattr(a, "comment", None),
+        rows.append({
+            "question_key": q["key"],
+            "section": q["section"],
+            "step": q["step"],
+            "text": q["text"],
+            "answer_value": answer.answer_value,
+            "comment": answer.comment,
+            "sort_order": q["sort_order"],
         })
 
-    goal, visit_comment = _legacy_visit_goal_and_comment(selected_visit, audit)
+    timing = db.scalar(
+        select(VisitTiming).where(
+            VisitTiming.audit_id == audit.id,
+            VisitTiming.visit_number == visit_number,
+        )
+    )
+    from app.timezone_utils import to_tashkent_naive
+    started_local = to_tashkent_naive(timing.started_at) if timing and timing.started_at else None
+    ended_local = to_tashkent_naive(timing.ended_at) if timing and timing.ended_at else None
 
     return {
-        "audit_id": str(getattr(audit, "id", audit_id)),
-        "visit_id": str(getattr(selected_visit, "id", "")) if selected_visit else None,
-        "date": getattr(audit, "completed_at", None) or getattr(audit, "created_at", None),
-        "employee": getattr(getattr(audit, "employee", None), "full_name", None) or getattr(getattr(audit, "employee", None), "name", None),
-        "auditor": getattr(getattr(audit, "auditor", None), "full_name", None) or getattr(getattr(audit, "auditor", None), "name", None),
-        "region": getattr(getattr(audit, "region", None), "name", None),
-        "tt_code": (
-            getattr(selected_visit, "tt_code", None)
-            or getattr(selected_visit, "store_code", None)
-            or getattr(selected_visit, "code", None)
-        ) if selected_visit else None,
-        "goal": goal,
-        "visit_comment": visit_comment,
-        "answers": answers,
+        "audit_id": audit.id,
+        "visit_number": visit.visit_number,
+        "audit_date": audit.audit_date,
+        "employee_name": audit.employee.full_name,
+        "auditor_name": audit.auditor.full_name,
+        "region_name": audit.region.name,
+        "shop_code": visit.shop_code or "—",
+        "goal": (visit.goal or "").strip() or "—",
+        "visit_comment": (visit.comment or "").strip() or "—",
+        "latitude": visit.latitude,
+        "longitude": visit.longitude,
+        "visit_started_at": started_local.isoformat() if started_local else None,
+        "visit_ended_at": ended_local.isoformat() if ended_local else None,
+        "total_percent": audit.total_percent,
+        "level": audit.level,
+        "answers": rows,
     }
 
