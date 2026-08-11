@@ -108,57 +108,77 @@ function updateNextState(){
   if(cooldownLeft>0){state.navigationCooldownTimer=setTimeout(()=>{state.navigationCooldownTimer=null;updateNextState()},cooldownLeft+30)}
 }
 function setSaving(t){const s=$('#saveState');if(s)s.textContent=t;updateNextState()}
-function updateLocalAnswer(visit,key,value){let found=state.audit.answers.find(a=>a.visit_number===visit&&a.question_key===key);if(found){found.answer_value=value;found.comment=null}else{found={visit_number:visit,question_key:key,answer_value:value,comment:null};state.audit.answers.push(found)}state.pendingAnswers.set(`${visit}:${key}`,found);persistDraft();scheduleSync();updateNextState()}
-function persistDraft(){if(state.audit)localStorage.setItem('sle_draft_'+state.audit.id,JSON.stringify({answers:state.audit.answers,visits:state.audit.visits,current_visit:state.visit,current_step:state.step,ts:Date.now()}))}
-function scheduleSync(delay=700){setSaving('Сохранение…');clearTimeout(state.syncTimer);state.syncTimer=setTimeout(()=>flushSync().catch(e=>{setSaving('Ошибка сохранения');toast(e.message)}),delay)}
+let syncDrainPromise=null;
+let pendingSyncExtra={};
+
+function updateLocalAnswer(visit,key,value){
+  let found=state.audit.answers.find(a=>a.visit_number===visit&&a.question_key===key);
+  if(found){found.answer_value=value;found.comment=null}
+  else{found={visit_number:visit,question_key:key,answer_value:value,comment:null};state.audit.answers.push(found)}
+  state.pendingAnswers.set(`${visit}:${key}`,found);
+  persistDraft();
+  scheduleSync(650);
+  updateNextState();
+}
+function persistDraft(){
+  if(state.audit)localStorage.setItem('sle_draft_'+state.audit.id,JSON.stringify({answers:state.audit.answers,visits:state.audit.visits,current_visit:state.visit,current_step:state.step,ts:Date.now()}));
+}
+function scheduleSync(delay=900){
+  if(!navigator.onLine){setSaving('Нет сети — изменения сохранены на устройстве');return}
+  setSaving('Сохранение…');
+  clearTimeout(state.syncTimer);
+  state.syncTimer=setTimeout(()=>flushSync().catch(e=>{setSaving('Ошибка сохранения');toast(e.message)}),delay);
+}
 async function flushSync(extra={}){
   clearTimeout(state.syncTimer);
+  if(extra&&extra.constructor===Object)Object.assign(pendingSyncExtra,extra);
 
-  // Если уже идёт сохранение, ждём его завершения, затем обязательно
-  // отправляем всё, что накопилось во время предыдущего запроса.
-  if(state.syncing)await state.syncing;
+  // Один общий drain на весь опросник. Если flushSync вызвали несколько обработчиков
+  // одновременно, они ждут один и тот же Promise — параллельных PUT /sync не будет.
+  if(syncDrainPromise)return syncDrainPromise;
 
-  const answers=[...state.pendingAnswers.values()].map(a=>({
-    visit_number:a.visit_number,
-    question_key:a.question_key,
-    answer_value:a.answer_value,
-    comment:null
-  }));
-  const visitPayload=Object.keys(state.pendingVisit).length?{...state.pendingVisit}:null;
+  syncDrainPromise=(async()=>{
+    while(true){
+      if(!navigator.onLine){setSaving('Нет сети — изменения сохранены на устройстве');return}
 
-  if(!answers.length&&!visitPayload&&!Object.keys(extra).length){
-    setSaving('Сохранено');
-    return;
-  }
+      const answers=[...state.pendingAnswers.values()].map(a=>({
+        visit_number:a.visit_number,question_key:a.question_key,answer_value:a.answer_value,comment:null
+      }));
+      const visitPayload=Object.keys(state.pendingVisit||{}).length?{...state.pendingVisit}:null;
+      const extraPayload={...pendingSyncExtra};
+      pendingSyncExtra={};
 
-  const payload={answers,current_visit:state.visit,current_step:state.step,...extra};
-  if(visitPayload&&state.visit){payload.visit_number=state.visit;payload.visit=visitPayload}
+      if(!answers.length&&!visitPayload&&!Object.keys(extraPayload).length){setSaving('Сохранено');return}
 
-  const sentAnswers=new Map(answers.map(a=>[`${a.visit_number}:${a.question_key}`,a.answer_value]));
-  state.syncing=api(`/audits/${state.audit.id}/sync`,{
-    method:'PUT',
-    body:JSON.stringify(payload)
-  }).then(()=>{
-    for(const [key,value] of sentAnswers){
-      const current=state.pendingAnswers.get(key);
-      if(current&&current.answer_value===value)state.pendingAnswers.delete(key);
-    }
-    if(visitPayload){
-      for(const [key,value] of Object.entries(visitPayload)){
-        if(state.pendingVisit[key]===value)delete state.pendingVisit[key];
+      const payload={answers,current_visit:state.visit,current_step:state.step,...extraPayload};
+      if(visitPayload&&state.visit){payload.visit_number=state.visit;payload.visit=visitPayload}
+
+      const sentAnswers=new Map(answers.map(a=>[`${a.visit_number}:${a.question_key}`,a.answer_value]));
+      state.syncing=api(`/audits/${state.audit.id}/sync`,{method:'PUT',body:JSON.stringify(payload),timeout:18000});
+      try{
+        await state.syncing;
+        for(const [key,value] of sentAnswers){
+          const current=state.pendingAnswers.get(key);
+          if(current&&current.answer_value===value)state.pendingAnswers.delete(key);
+        }
+        if(visitPayload){
+          for(const [key,value] of Object.entries(visitPayload)){
+            if(state.pendingVisit[key]===value)delete state.pendingVisit[key];
+          }
+        }
+        setSaving('Сохранено');
+      }finally{
+        state.syncing=null;
+        updateNextState();
       }
+      // Цикл повторится только если во время запроса пользователь успел внести
+      // новые изменения. Они уйдут следующим, единственным запросом.
     }
-    setSaving('Сохранено');
-  }).finally(()=>state.syncing=null);
+  })().finally(()=>{syncDrainPromise=null;updateNextState()});
 
-  await state.syncing;
-  updateNextState();
-
-  // Досохраняем изменения, которые появились пока шёл запрос.
-  if(state.pendingAnswers.size||Object.keys(state.pendingVisit).length){
-    return flushSync();
-  }
+  return syncDrainPromise;
 }
+
 function bindWizard(){
   updateNextState();
   if(state.visit&&state.step===1)api(`/extras/audit/${state.audit.id}/visit/${state.visit}/start`,{method:'POST'}).catch(()=>{});
@@ -171,7 +191,7 @@ function bindWizard(){
   if(prev)prev.onclick=e=>{e.preventDefault();if(state.navigationBusy||Date.now()<(state.navigationCooldownUntil||0))return;prevStep()};
   if(next)next.onclick=e=>{e.preventDefault();e.stopPropagation();if(next.disabled||state.navigationBusy||Date.now()<(state.navigationCooldownUntil||0))return;nextStep()};
 }
-function saveVisitFields(extra={}){if(!state.visit||!state.audit)return;const visits=Array.isArray(state.audit.visits)?state.audit.visits:(state.audit.visits=[]);let visit=visits.find(v=>v&&v.visit_number===state.visit);if(!visit){visit={visit_number:state.visit,shop_code:'',goal:'',comment:'',latitude:null,longitude:null,gps_accuracy:null};visits.push(visit)}const payload={};if($('#shopCode'))payload.shop_code=$('#shopCode').value.trim();if($('#visitGoal'))payload.goal=$('#visitGoal').value.trim();if($('#visitComment'))payload.comment=$('#visitComment').value;if(extra&&extra.constructor===Object)Object.assign(payload,extra);if(!state.pendingVisit||typeof state.pendingVisit!=='object')state.pendingVisit={};Object.assign(visit,payload);Object.assign(state.pendingVisit,payload);persistDraft();scheduleSync();updateNextState()}
+function saveVisitFields(extra={}){if(!state.visit||!state.audit)return;const visits=Array.isArray(state.audit.visits)?state.audit.visits:(state.audit.visits=[]);let visit=visits.find(v=>v&&v.visit_number===state.visit);if(!visit){visit={visit_number:state.visit,shop_code:'',goal:'',comment:'',latitude:null,longitude:null,gps_accuracy:null};visits.push(visit)}const payload={};if($('#shopCode'))payload.shop_code=$('#shopCode').value.trim();if($('#visitGoal'))payload.goal=$('#visitGoal').value.trim();if($('#visitComment'))payload.comment=$('#visitComment').value;if(extra&&extra.constructor===Object)Object.assign(payload,extra);if(!state.pendingVisit||typeof state.pendingVisit!=='object')state.pendingVisit={};Object.assign(visit,payload);Object.assign(state.pendingVisit,payload);persistDraft();scheduleSync(1200);updateNextState()}
 function captureGps(){if(!navigator.geolocation)return toast('Геолокация не поддерживается на этом устройстве');const btn=$('#gps');if(btn){btn.disabled=true;btn.textContent='Определение местоположения…'}navigator.geolocation.getCurrentPosition(async p=>{try{saveVisitFields({latitude:p.coords.latitude,longitude:p.coords.longitude,gps_accuracy:p.coords.accuracy});await flushSync();toast('GPS-координаты сохранены');renderWizard()}catch(e){toast(e.message)}},e=>{if(btn){btn.disabled=false;btn.textContent='Определить местоположение'};const messages={1:'Доступ к геолокации запрещён',2:'Местоположение недоступно',3:'Превышено время ожидания GPS'};toast(messages[e.code]||('Не удалось определить местоположение: '+e.message))},{enableHighAccuracy:true,timeout:25000,maximumAge:0})}
 function currentComplete(){const map=answersMap(),qs=state.questions.filter(q=>q.step===state.step),visit=[0,8].includes(state.step)?0:state.visit;if(qs.some(q=>!map[`${visit}:${q.key}`]))return false;if(state.step===1){const v=state.audit.visits.find(x=>x.visit_number===state.visit);if(!v.shop_code||!v.goal||v.latitude==null||v.longitude==null)return false}return true}
 async function saveProgress(){await flushSync({current_visit:state.visit,current_step:state.step})}
@@ -240,4 +260,13 @@ async function prevStep(){
     updateNextState();
   }
 }
+if(!window.__sleAuditOnlineSyncBound){
+  window.__sleAuditOnlineSyncBound=true;
+  window.addEventListener('online',()=>{
+    if(state.audit&&(state.pendingAnswers.size||Object.keys(state.pendingVisit||{}).length||Object.keys(pendingSyncExtra).length)){
+      flushSync().catch(e=>{setSaving('Ошибка сохранения');toast(e.message)});
+    }
+  });
+}
+
 function renderResult(a){shell(`<div class="card accent result"><div class="saved">✅ Результаты сохранены</div><div class="score">${Math.round(a.total_percent||0)}%</div><h1>${esc(a.level||'')}</h1><p class="muted">${esc(a.employee_name||'')}</p><button class="btn primary" id="toHome">На главную</button></div>`);$('#toHome').onclick=home}

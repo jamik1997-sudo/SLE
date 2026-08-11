@@ -109,7 +109,7 @@ async function api(path,opt={}){
         if(externalSignal.aborted)controller.abort(externalSignal.reason);
         else externalSignal.addEventListener('abort',abortFromExternal,{once:true});
       }
-      const timeoutMs=opt.timeout||(attempt===0?8000:12000);
+      const timeoutMs=opt.timeout||(method==='GET'?(attempt===0?8000:12000):15000);
       const timeout=setTimeout(()=>controller.abort(),timeoutMs);
       const headers={...authHeaders(),...(opt.headers||{})};
       if(opt.body!=null)headers['Content-Type']='application/json';
@@ -136,7 +136,7 @@ async function api(path,opt={}){
         console.error('API error',path,data);throw new Error(message);
       }catch(e){
         if(externalSignal?.aborted)throw e;
-        lastError=e.name==='AbortError'?new Error('Сервер отвечает слишком долго'):e;
+        lastError=e.name==='AbortError'?new Error('Сервер отвечает слишком долго'):(e instanceof TypeError?new Error('Нет связи с сервером. Проверьте интернет и повторите попытку.'):e);
         if(!retryable||attempt===attempts-1)throw lastError;
         await sleep(500);
       }finally{
