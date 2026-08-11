@@ -110,16 +110,70 @@ function scheduleDashboardApply(delay=450){
   clearTimeout(dashboardFilterTimer);
   dashboardFilterTimer=setTimeout(()=>dashboard(currentDashboardFilters(),{partial:true}),delay);
 }
+async function completedVisitView(auditId,visitNumber){
+  if(!auditId||!visitNumber)return;
+  const pageId=beginPage();
+  loadingPage('dashboard','Заполненный опросник');
+  try{
+    const data=await api(`/audits/${encodeURIComponent(auditId)}/visit-view?visit_number=${encodeURIComponent(visitNumber)}`,{force:true});
+    if(!isCurrentPage(pageId))return;
+    const rows=asArray(data?.answers,'answers');
+    const grouped=new Map();
+    rows.forEach((a,i)=>{
+      const step=Number(a.step||0);
+      const section=a.section||'Раздел';
+      const key=`${step}|||${section}`;
+      if(!grouped.has(key))grouped.set(key,{step,section,items:[]});
+      grouped.get(key).items.push({...a,_i:i});
+    });
+    const answerLabel=(v)=>{
+      const s=String(v??'').toUpperCase();
+      if(s==='1')return '1 — выполнено';
+      if(s==='0')return '0 — не выполнено';
+      if(s==='NA'||s==='N/A')return 'N/A — не применимо';
+      return s||'—';
+    };
+    const stepName=(n)=>({1:'Шаг №1 Подготовка',2:'Шаг №2 Представление',3:'Шаг №3 Осмотр',4:'Шаг №4 Предложение',5:'Шаг №5 Работа в точке',6:'Шаг №6 Завершение визита',7:'Шаг №7 Анализ визита'})[n]||`Шаг №${n}`;
+    const sections=[...grouped.values()].sort((a,b)=>a.step-b.step).map(g=>`
+      <div class="card questionnaire-readonly-section">
+        <h2>${esc(stepName(g.step))}</h2>
+        <h3>${esc(g.section)}</h3>
+        <div class="table-wrap"><table class="table"><thead><tr><th style="width:52px">№</th><th>Вопрос</th><th style="width:190px">Ответ</th><th>Комментарий</th></tr></thead><tbody>
+          ${g.items.map((a,i)=>`<tr><td>${i+1}</td><td>${esc(a.text||a.question_key||'—')}</td><td><strong>${esc(answerLabel(a.answer_value))}</strong></td><td>${esc(a.comment||'—')}</td></tr>`).join('')}
+        </tbody></table></div>
+      </div>`).join('');
+    const coords=data.latitude!=null&&data.longitude!=null?`${Number(data.latitude).toFixed(6)}, ${Number(data.longitude).toFixed(6)}`:'—';
+    shell(`${mainNav('dashboard')}<div class="dashboard-head"><div><h1>Заполненный опросник</h1><p class="muted">Точка ${esc(data.visit_number)} · ${esc(data.shop_code||'—')}</p></div><button class="btn secondary" id="backToDashboard">← Назад в дашборд</button></div>
+      <div class="card"><div class="grid two">
+        <div><b>Дата:</b> ${esc(data.audit_date||'—')}</div><div><b>Сотрудник:</b> ${esc(data.employee_name||'—')}</div>
+        <div><b>Регион:</b> ${esc(data.region_name||'—')}</div><div><b>Оценивающий:</b> ${esc(data.auditor_name||'—')}</div>
+        <div><b>Код ТТ:</b> ${esc(data.shop_code||'—')}</div><div><b>Результат:</b> ${data.total_percent==null?'—':esc(data.total_percent)+'%'} ${esc(data.level||'')}</div>
+        <div><b>Цель визита:</b> ${esc(data.goal||'—')}</div><div><b>Комментарий:</b> ${esc(data.visit_comment||'—')}</div>
+        <div><b>Локация:</b> ${esc(coords)}</div><div><b>Время начала:</b> ${esc(data.visit_started_at?formatTashkentDateTime(data.visit_started_at):'—')}</div>
+      </div></div>${sections||'<div class="card"><p class="muted">Ответы по этой точке не найдены</p></div>'}`);
+    bindNav();
+    $('#backToDashboard').onclick=()=>dashboard(currentDashboardFilters());
+  }catch(e){
+    if(!isCurrentPage(pageId))return;
+    toast(e.message||'Не удалось открыть заполненный опросник');
+    dashboard(currentDashboardFilters());
+  }
+}
+
+function bindCompletedVisitRows(root=document){
+  $$('[data-visit-view]',root).forEach(row=>{
+    row.onclick=(event)=>{
+      if(event.target.closest('a,button,input,select,textarea'))return;
+      completedVisitView(row.dataset.visitView,Number(row.dataset.visitNumber||1));
+    };
+  });
+}
+
 function bindDashboardFilters(){
   const region=$('#dashRegion'),auditor=$('#dashAuditor'),employee=$('#dashEmployee'),month=$('#dashMonth');
   if(!region||!auditor||!employee||!month)return;
   filterDashboardDependentOptions();
-  $$('[data-visit-view]').forEach(row=>{
-    row.onclick=(event)=>{
-      if(event.target.closest('a,button'))return;
-      completedVisitView(row.dataset.visitView,Number(row.dataset.visitNumber));
-    };
-  });
+  bindCompletedVisitRows();
   region.onchange=()=>{filterDashboardDependentOptions();scheduleDashboardApply()};
   auditor.onchange=()=>scheduleDashboardApply();
   employee.onchange=()=>scheduleDashboardApply();
@@ -186,5 +240,6 @@ async function dashboard(filters={},opts={}){
     $('#dashLoading')?.setAttribute('hidden','');if($('#resetDashFilters'))$('#resetDashFilters').disabled=false;
     if($('#applyDashFilters'))$('#applyDashFilters').disabled=false;
     $$('[data-open]',results).forEach(r=>r.onclick=()=>openAudit(r.dataset.open));
+    bindCompletedVisitRows(results);
   }
 }
