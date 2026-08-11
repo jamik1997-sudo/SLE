@@ -160,13 +160,29 @@ async function completedVisitView(auditId,visitNumber){
   }
 }
 
+let completedVisitDelegationBound=false;
 function bindCompletedVisitRows(root=document){
   $$('[data-visit-view]',root).forEach(row=>{
+    row.style.cursor='pointer';
+    row.title='Открыть заполненный опросник';
     row.onclick=(event)=>{
       if(event.target.closest('a,button,input,select,textarea'))return;
+      event.preventDefault();
+      event.stopPropagation();
       completedVisitView(row.dataset.visitView,Number(row.dataset.visitNumber||1));
     };
   });
+  if(!completedVisitDelegationBound){
+    completedVisitDelegationBound=true;
+    document.addEventListener('click',(event)=>{
+      const row=event.target.closest?.('[data-visit-view]');
+      if(!row)return;
+      if(event.target.closest('a,button,input,select,textarea'))return;
+      event.preventDefault();
+      event.stopPropagation();
+      completedVisitView(row.dataset.visitView,Number(row.dataset.visitNumber||1));
+    });
+  }
 }
 
 function bindDashboardFilters(){
