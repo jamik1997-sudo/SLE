@@ -2,7 +2,7 @@ import json
 from datetime import datetime, date
 import logging
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, delete, text, or_, func, case, distinct
+from sqlalchemy import select, delete, text, or_, func, case, distinct, and_
 from sqlalchemy.orm import Session, selectinload, joinedload
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from app.database import get_db
@@ -811,3 +811,68 @@ def submit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(cu
     ))
     db.commit()
     return {"total_score": total, "total_percent": percent, "level": level, "sections": sections}
+
+
+@router.get("/{audit_id}/visit-view")
+def audit_visit_view(
+    audit_id: str,
+    visit_id: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    audit = (
+        db.query(Audit)
+        .options(
+            selectinload(Audit.answers),
+            selectinload(Audit.visits),
+            joinedload(Audit.employee),
+            joinedload(Audit.auditor),
+            joinedload(Audit.region),
+        )
+        .filter(Audit.id == audit_id)
+        .first()
+    )
+    if not audit:
+        raise HTTPException(status_code=404, detail="Аудит не найден")
+
+    if getattr(current_user, "role", None) == Role.leader:
+        if str(getattr(audit, "region_id", "")) != str(getattr(current_user, "region_id", "")):
+            raise HTTPException(status_code=403, detail="Нет доступа")
+
+    visits = list(getattr(audit, "visits", []) or [])
+    selected_visit = None
+    if visit_id:
+        selected_visit = next((v for v in visits if str(getattr(v, "id", "")) == str(visit_id)), None)
+    if selected_visit is None and visits:
+        selected_visit = visits[0]
+
+    answers = []
+    for a in list(getattr(audit, "answers", []) or []):
+        av_id = getattr(a, "visit_id", None)
+        if selected_visit is not None and av_id is not None and str(av_id) != str(getattr(selected_visit, "id", "")):
+            continue
+        answers.append({
+            "question_id": getattr(a, "question_id", None),
+            "value": getattr(a, "value", getattr(a, "answer", None)),
+            "comment": getattr(a, "comment", None),
+        })
+
+    goal, visit_comment = _legacy_visit_goal_and_comment(selected_visit, audit)
+
+    return {
+        "audit_id": str(getattr(audit, "id", audit_id)),
+        "visit_id": str(getattr(selected_visit, "id", "")) if selected_visit else None,
+        "date": getattr(audit, "completed_at", None) or getattr(audit, "created_at", None),
+        "employee": getattr(getattr(audit, "employee", None), "full_name", None) or getattr(getattr(audit, "employee", None), "name", None),
+        "auditor": getattr(getattr(audit, "auditor", None), "full_name", None) or getattr(getattr(audit, "auditor", None), "name", None),
+        "region": getattr(getattr(audit, "region", None), "name", None),
+        "tt_code": (
+            getattr(selected_visit, "tt_code", None)
+            or getattr(selected_visit, "store_code", None)
+            or getattr(selected_visit, "code", None)
+        ) if selected_visit else None,
+        "goal": goal,
+        "visit_comment": visit_comment,
+        "answers": answers,
+    }
+

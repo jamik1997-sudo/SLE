@@ -1,3 +1,4 @@
+function escapeHtml(value){return String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\\\"":"&quot;","'":"&#039;"}[c]));}
 function mainNav(active='home'){
   const admin=['admin','manager'].includes(state.me.role)?'<button class="pill" data-page="admin">Управление</button>':'';
   return `<div class="nav"><button class="pill ${active==='home'?'active':''}" data-page="home">Главная</button><button class="pill ${active==='dashboard'?'active':''}" data-page="dashboard">Дашборд</button><button class="pill ${active==='history'?'active':''}" data-page="history">Отчёты</button>${admin}${['admin','manager'].includes(state.me.role)?'<button class="pill '+(active==='logs'?'active':'')+'" data-page="logs">Журнал</button>':''}${state.me.role==='admin'?'<button class="pill '+(active==='settings'?'active':'')+'" data-page="settings">Настройки</button>':''}</div>`;
@@ -89,3 +90,46 @@ async function settingsPage(){
     $$('[data-edit-question]').forEach(b=>b.onclick=async()=>{const q=questions.find(x=>x.key===b.dataset.editQuestion);const text_ru=prompt('Текст вопроса',q.text_ru);if(text_ru===null)return;const weight=Number(prompt('Вес',q.weight));if(!Number.isFinite(weight))return;try{await api('/extras/question-settings/'+q.key,{method:'PUT',body:JSON.stringify({text_ru,weight})});toast('Вопрос изменён');settingsPage()}catch(err){toast(err.message)}});
   }catch(e){toast(e.message)}
 }
+
+async function openCompletedVisitView(auditId, visitId=""){
+  const host=document.querySelector("#app")||document.querySelector("main")||document.body;
+  try{
+    const qs=visitId?`?visit_id=${encodeURIComponent(visitId)}`:"";
+    const data=await api(`/audits/${encodeURIComponent(auditId)}/visit-view${qs}`);
+    const answers=Array.isArray(data?.answers)?data.answers:[];
+    const rows=answers.map((a,i)=>`<tr>
+      <td>${i+1}</td>
+      <td>${escapeHtml(a.question_id||"")}</td>
+      <td><b>${escapeHtml(String(a.value??"—").toUpperCase()==="NA"?"N/A":a.value??"—")}</b></td>
+      <td>${escapeHtml(a.comment||"—")}</td>
+    </tr>`).join("");
+    host.innerHTML=`<div class="page audit-readonly-view">
+      <div class="page-head" style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <div><h2 style="margin:0">Заполненный опросник</h2><div class="muted">${escapeHtml(data.tt_code||"ТТ")} · ${escapeHtml(data.employee||"")}</div></div>
+        <button class="btn secondary" id="visitViewBack">← Назад</button>
+      </div>
+      <div class="card" style="margin-top:12px">
+        <div><b>Регион:</b> ${escapeHtml(data.region||"—")}</div>
+        <div><b>Оценивающий:</b> ${escapeHtml(data.auditor||"—")}</div>
+        <div><b>Цель визита:</b> ${escapeHtml(data.goal||"—")}</div>
+        <div><b>Комментарий:</b> ${escapeHtml(data.visit_comment||"—")}</div>
+      </div>
+      <div class="card" style="margin-top:12px;overflow:auto">
+        <table class="table" style="width:100%">
+          <thead><tr><th>№</th><th>Вопрос</th><th>Ответ</th><th>Комментарий</th></tr></thead>
+          <tbody>${rows||'<tr><td colspan="4" class="muted">Ответы не найдены</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>`;
+    document.querySelector("#visitViewBack")?.addEventListener("click",()=>home());
+  }catch(e){
+    if(typeof toast==="function") toast(e?.message||"Не удалось открыть опросник","error");
+  }
+}
+document.addEventListener("click",(e)=>{
+  const row=e.target.closest?.("[data-open-audit]");
+  if(!row)return;
+  const auditId=row.getAttribute("data-open-audit");
+  const visitId=row.getAttribute("data-visit-id")||"";
+  if(auditId)openCompletedVisitView(auditId,visitId);
+});
