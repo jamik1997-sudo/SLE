@@ -1056,7 +1056,7 @@ def submit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(cu
         .order_by(QuestionSetting.sort_order)
     ).all()
 
-    # v6.4.4: analysis_2 requires a comment for every completed visit.
+    # v6.4.5: analysis_2 requires a comment for every completed visit.
     for visit_number in range(1, 6):
         analysis_answer = next(
             (a for a in audit.answers if a.visit_number == visit_number and a.question_key == "analysis_2"),

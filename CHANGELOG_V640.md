@@ -1,4 +1,4 @@
-# SLE v6.4.4 — Offline Mode
+# SLE v6.4.5 — Offline Mode
 
 - Audit questionnaire continues working without internet after required lists/questionnaire were cached once.
 - A new audit can be created offline from cached region/employee data.
