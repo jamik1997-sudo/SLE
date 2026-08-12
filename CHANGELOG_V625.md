@@ -1,4 +1,4 @@
-# SLE v6.4.5 — Completed Visit Click Fix
+# SLE v6.4.6 — Completed Visit Click Fix
 
 - Fixed click on rows in “Последние завершённые аудиты”.
 - Added a document-level delegated click fallback, so clicks survive dashboard re-render/autofilters.
