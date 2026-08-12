@@ -80,7 +80,7 @@ input[readonly]{opacity:.9;cursor:not-allowed}
 .brand-home{appearance:none;border:0;background:transparent;color:inherit;padding:4px 2px;cursor:pointer;font:inherit}.brand-home:hover{opacity:.82}.brand-home:focus-visible{outline:3px solid rgba(255,212,0,.35);outline-offset:4px;border-radius:8px}
 
 
-/* v6.4.2 — compact recent audits table */
+/* v6.4.3 — compact recent audits table */
 .nowrap{white-space:nowrap}
 .recent-audits-wrap{overflow-x:auto}
 .recent-audits-table{min-width:980px;table-layout:auto}

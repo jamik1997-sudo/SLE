@@ -1,11 +1,13 @@
 function escapeHtml(value){return String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\\\"":"&quot;","'":"&#039;"}[c]));}
 function mainNav(active='home'){
-  const admin=['admin','manager'].includes(state.me.role)?'<button class="pill" data-page="admin">Управление</button>':'';
-  const compare=state.me.role==='admin'?'<button class="pill '+(active==='comparison'?'active':'')+'" data-page="comparison">Сравнение визитов</button>':'';
-  return `<div class="nav"><button class="pill ${active==='home'?'active':''}" data-page="home">Главная</button><button class="pill ${active==='dashboard'?'active':''}" data-page="dashboard">Дашборд</button><button class="pill ${active==='history'?'active':''}" data-page="history">Отчёты</button>${compare}${admin}${['admin','manager'].includes(state.me.role)?'<button class="pill '+(active==='logs'?'active':'')+'" data-page="logs">Журнал</button>':''}${state.me.role==='admin'?'<button class="pill '+(active==='settings'?'active':'')+'" data-page="settings">Настройки</button>':''}</div>`;
+  const role=state.me?.role||'';
+  const admin=['admin','manager'].includes(role)?'<button class="pill" data-page="admin">Управление</button>':'';
+  const compare=role==='admin'?'<button class="pill '+(active==='comparison'?'active':'')+'" data-page="comparison">Сравнение визитов</button>':'';
+  return `<div class="nav"><button class="pill ${active==='home'?'active':''}" data-page="home">Главная</button><button class="pill ${active==='dashboard'?'active':''}" data-page="dashboard">Дашборд</button><button class="pill ${active==='history'?'active':''}" data-page="history">Отчёты</button>${compare}${admin}${['admin','manager'].includes(role)?'<button class="pill '+(active==='logs'?'active':'')+'" data-page="logs">Журнал</button>':''}${role==='admin'?'<button class="pill '+(active==='settings'?'active':'')+'" data-page="settings">Настройки</button>':''}</div>`;
 }
 let newAuditOpenBusy=false;
 function renderHome(){
+  if(!state.me)return;
   state.audits=asArray(state.audits,'audits').filter(a=>a&&a.status!=='cancelled');
   const drafts=state.audits.filter(a=>['draft','in_progress'].includes(a.status)&&a.is_mine!==false);
   shell(`${mainNav('home')}${drafts.length?`<div class="card accent"><h2>Черновики</h2>${drafts.map(d=>`<div class="visit-row"><span>${esc(d.employee_name)} · ${esc(d.region_name)}</span><span class="actions"><button class="btn primary small" data-resume="${d.id}">Продолжить</button></span></div>`).join('')}</div>`:''}<div class="card"><h2>Новый аудит</h2><p class="muted">Оценка сотрудника по пяти торговым точкам</p><button class="btn primary" id="newAudit">Начать</button></div><div class="card"><h2>Последние аудиты</h2>${auditTable(state.audits.slice(0,8))}</div>`);
@@ -19,6 +21,15 @@ function renderHome(){
   $$('[data-resume]').forEach(b=>b.onclick=()=>openAudit(b.dataset.resume));
 }
 async function home(){
+  if(!state.me){
+    try{state.me=await api('/auth/me',{force:true});}
+    catch(e){
+      console.warn('Home refresh: user is not loaded',e);
+      if(typeof loginPage==='function')return loginPage();
+      return;
+    }
+  }
+
   const pageId=beginPage();
   state.audits=asArray(state.audits,'audits');
   if(!state.audits.length)state.audits=readCachedArray('sle_audits_cache');
