@@ -30,10 +30,11 @@ async function boot(){
     if(state.me)home();
     state.me=await api('/auth/me');localStorage.setItem('sle_me',JSON.stringify(state.me));
     if(!document.querySelector('.shell'))home();
-  }catch{logout()}
+    if(navigator.onLine)syncStoredOfflineDrafts();
+  }catch(e){if(state.me&&state.token&&!navigator.onLine){home();return}logout()}
 }
 function renderLogin(){
   app.innerHTML=`<div class="login"><div class="login-head"><div class="login-logo">SLE</div><button class="icon-btn" id="themeToggle">${state.theme==='dark'?'☀️':'🌙'}</button></div><div class="card accent"><h1>Вход</h1><p class="muted">Введите логин и пароль</p><form id="login"><div class="field"><label>Логин</label><input name="login" required autocomplete="username"></div><div class="field" style="margin-top:12px"><label>Пароль</label><input name="password" type="password" required autocomplete="current-password"></div><button class="btn primary full" style="margin-top:16px">Войти</button></form></div></div>`;
   $('#themeToggle').onclick=toggleTheme;
-  $('#login').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);const payload=Object.fromEntries(f);payload.device_id=getDeviceId();payload.device_name=getDeviceName();try{const d=await api('/auth/login',{method:'POST',body:JSON.stringify(payload)});state.token=d.access_token;localStorage.setItem('sle_token',state.token);state.me=await api('/auth/me',{force:true});state.regions=null;localStorage.removeItem('sle_regions');localStorage.setItem('sle_me',JSON.stringify(state.me));home()}catch(err){toast(err.message)}};
+  $('#login').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);const payload=Object.fromEntries(f);payload.device_id=getDeviceId();payload.device_name=getDeviceName();try{const d=await api('/auth/login',{method:'POST',body:JSON.stringify(payload)});state.token=d.access_token;localStorage.setItem('sle_token',state.token);state.me=await api('/auth/me',{force:true});state.regions=null;localStorage.removeItem('sle_regions');localStorage.setItem('sle_me',JSON.stringify(state.me));home();syncStoredOfflineDrafts()}catch(err){toast(err.message)}};
 }

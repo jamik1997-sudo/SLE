@@ -1,7 +1,7 @@
 function escapeHtml(value){return String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\\\"":"&quot;","'":"&#039;"}[c]));}
 function mainNav(active='home'){
   const admin=['admin','manager'].includes(state.me.role)?'<button class="pill" data-page="admin">Управление</button>':'';
-  const compare=['admin','manager','auditor'].includes(state.me.role)?'<button class="pill '+(active==='comparison'?'active':'')+'" data-page="comparison">Сравнение визитов</button>':'';
+  const compare=state.me.role==='admin'?'<button class="pill '+(active==='comparison'?'active':'')+'" data-page="comparison">Сравнение визитов</button>':'';
   return `<div class="nav"><button class="pill ${active==='home'?'active':''}" data-page="home">Главная</button><button class="pill ${active==='dashboard'?'active':''}" data-page="dashboard">Дашборд</button><button class="pill ${active==='history'?'active':''}" data-page="history">Отчёты</button>${compare}${admin}${['admin','manager'].includes(state.me.role)?'<button class="pill '+(active==='logs'?'active':'')+'" data-page="logs">Журнал</button>':''}${state.me.role==='admin'?'<button class="pill '+(active==='settings'?'active':'')+'" data-page="settings">Настройки</button>':''}</div>`;
 }
 let newAuditOpenBusy=false;

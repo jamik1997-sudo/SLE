@@ -431,6 +431,7 @@ def dashboard(
             started_local = to_tashkent_naive(timing.started_at) if timing and timing.started_at else None
             recent.append({
                 "id": audit.id, "visit_number": visit.visit_number, "audit_date": audit.audit_date,
+                "employee_name": audit.employee.full_name,
                 "visit_started_at": started_local.isoformat() if started_local else None,
                 "visit_start_time": started_local.strftime("%H:%M") if started_local else "—",
                 "shop_code": visit.shop_code or "—",
@@ -497,7 +498,7 @@ def dashboard(
                     "role": x.role.value,
                     "region_ids": [link.region_id for link in x.regions] if x.role == Role.leader else [],
                 } for x in option_auditors],
-                "employees": [{"id": x.id, "name": x.full_name, "region_id": x.region_id} for x in option_employees],
+                "employees": [{"id": x.id, "name": x.full_name, "region_id": x.region_id, "leader_id": getattr(x, "leader_id", None)} for x in option_employees],
                 "months": month_options,
             }, ttl=300)
 
@@ -515,8 +516,8 @@ def dashboard(
 
 
 def _comparison_allowed(user: User):
-    if user.role not in (Role.admin, Role.manager, Role.auditor):
-        raise HTTPException(403, "Раздел сравнения доступен только администратору, менеджеру и аудитору")
+    if user.role != Role.admin:
+        raise HTTPException(403, "Раздел сравнения доступен только администратору")
 
 
 def _question_catalog(db: Session):

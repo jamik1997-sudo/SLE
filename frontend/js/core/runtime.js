@@ -54,7 +54,8 @@ const state={
   audit:null,visit:0,step:0,regions:null,employees:new Map(),
   pendingAnswers:new Map(),pendingVisit:{},syncTimer:null,syncing:null,
   navigationBusy:false,navigationCooldownUntil:0,navigationCooldownTimer:null,
-  dashboardOptions:null,dashboardData:null,pageData:new Map()
+  dashboardOptions:null,dashboardData:null,pageData:new Map(),
+  offlineSyncing:false,offlinePendingSubmit:false,offlineLocalAudit:false,offlineTimings:{}
 };
 const $=(s,r=document)=>r.querySelector(s);
 const $$=(s,r=document)=>[...r.querySelectorAll(s)];
@@ -73,6 +74,51 @@ function asArray(value,...preferredKeys){
 function readCachedArray(key){
   try{return asArray(JSON.parse(localStorage.getItem(key)||'[]'))}catch{return []}
 }
+
+// Offline storage: IndexedDB with localStorage fallback.
+const OFFLINE_DB_NAME='sle-offline-v1';
+const OFFLINE_STORE='drafts';
+let offlineDbPromise=null;
+function openOfflineDb(){
+  if(!('indexedDB' in window))return Promise.resolve(null);
+  if(offlineDbPromise)return offlineDbPromise;
+  offlineDbPromise=new Promise((resolve)=>{
+    try{
+      const req=indexedDB.open(OFFLINE_DB_NAME,1);
+      req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains(OFFLINE_STORE))db.createObjectStore(OFFLINE_STORE,{keyPath:'id'})};
+      req.onsuccess=()=>resolve(req.result);req.onerror=()=>resolve(null);
+    }catch{resolve(null)}
+  });
+  return offlineDbPromise;
+}
+async function offlinePut(record){
+  if(!record?.id)return;
+  localStorage.setItem('sle_offline_'+record.id,JSON.stringify(record));
+  const db=await openOfflineDb();if(!db)return;
+  await new Promise(resolve=>{try{const tx=db.transaction(OFFLINE_STORE,'readwrite');tx.objectStore(OFFLINE_STORE).put(record);tx.oncomplete=resolve;tx.onerror=resolve}catch{resolve()}});
+}
+async function offlineGet(id){
+  const fallback=()=>{try{return JSON.parse(localStorage.getItem('sle_offline_'+id)||'null')}catch{return null}};
+  const db=await openOfflineDb();if(!db)return fallback();
+  return await new Promise(resolve=>{try{const tx=db.transaction(OFFLINE_STORE,'readonly');const req=tx.objectStore(OFFLINE_STORE).get(id);req.onsuccess=()=>resolve(req.result||fallback());req.onerror=()=>resolve(fallback())}catch{resolve(fallback())}});
+}
+async function offlineDelete(id){
+  localStorage.removeItem('sle_offline_'+id);
+  const db=await openOfflineDb();if(!db)return;
+  await new Promise(resolve=>{try{const tx=db.transaction(OFFLINE_STORE,'readwrite');tx.objectStore(OFFLINE_STORE).delete(id);tx.oncomplete=resolve;tx.onerror=resolve}catch{resolve()}});
+}
+function offlineQueueCount(){
+  if(!state.audit)return 0;
+  return (state.pendingAnswers?.size||0)+Object.keys(state.pendingVisit||{}).length+(state.offlinePendingSubmit?1:0)+(state.offlineLocalAudit?1:0);
+}
+function updateOfflineBanner(){
+  const el=$('#offline');if(!el)return;
+  const count=offlineQueueCount();
+  if(!navigator.onLine){el.hidden=false;el.textContent=`Офлайн — данные сохранены на устройстве${count?` · изменений: ${count}`:''}`;return}
+  if(state.offlineSyncing){el.hidden=false;el.textContent=`Синхронизация…${count?` · осталось: ${count}`:''}`;return}
+  el.hidden=true;
+}
+
 function showPageError(title='Не удалось загрузить страницу',message='Повторите попытку.'){
   const safeTitle=esc(title),safeMessage=esc(message);
   shell(`<div class="card"><h1>${safeTitle}</h1><p class="muted">${safeMessage}</p><button class="btn primary" id="retryPage">Повторить</button></div>`);
@@ -189,4 +235,4 @@ function goHomeFromBrand(){
   home();
 }
 function logout(){clearRequestCache();state.pageData.clear();state.dashboardOptions=null;state.dashboardData=null;localStorage.removeItem('sle_token');localStorage.removeItem('sle_me');localStorage.removeItem('sle_regions');localStorage.removeItem('sle_admin_bootstrap');localStorage.removeItem('sle_dashboard_options');localStorage.removeItem('sle_dashboard_data');state.token='';state.me=null;state.regions=null;state.employees.clear();renderLogin()}
-function syncStatus(){$('#offline')?.toggleAttribute('hidden',navigator.onLine)}
+function syncStatus(){updateOfflineBanner()}

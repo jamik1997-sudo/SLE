@@ -179,6 +179,18 @@ def end_visit(audit_id:str,visit_number:int,db:Session=Depends(get_db),user:User
     if not t: t=VisitTiming(audit_id=audit_id,visit_number=visit_number,started_at=datetime.utcnow());db.add(t)
     t.ended_at=datetime.utcnow();db.commit();return {"ended_at":t.ended_at}
 
+@router.put("/audit/{audit_id}/visit/{visit_number}/offline-timing")
+def offline_timing(audit_id:str,visit_number:int,payload:OfflineTimingIn,db:Session=Depends(get_db),user:User=Depends(current_user)):
+    a=db.get(Audit,audit_id)
+    if not a: raise HTTPException(404,"Аудит не найден")
+    if user.role in (Role.leader, Role.auditor) and a.auditor_id!=user.id: raise HTTPException(403,"Нет доступа")
+    t=db.scalar(select(VisitTiming).where(VisitTiming.audit_id==audit_id,VisitTiming.visit_number==visit_number))
+    if not t: t=VisitTiming(audit_id=audit_id,visit_number=visit_number);db.add(t)
+    if payload.started_at is not None and t.started_at is None: t.started_at=payload.started_at
+    if payload.ended_at is not None: t.ended_at=payload.ended_at
+    db.commit();return {"saved":True}
+
+
 @router.get("/audit/{audit_id}/timings")
 def timings(audit_id:str,db:Session=Depends(get_db),user:User=Depends(current_user)):
     rows=db.scalars(select(VisitTiming).where(VisitTiming.audit_id==audit_id).order_by(VisitTiming.visit_number)).all()

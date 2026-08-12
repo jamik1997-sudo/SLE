@@ -98,3 +98,8 @@ class BatchSyncIn(BaseModel):
     visit: VisitSave | None = None
     current_visit: int | None = None
     current_step: int | None = None
+
+
+class OfflineTimingIn(BaseModel):
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
