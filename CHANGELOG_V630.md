@@ -1,4 +1,4 @@
-# SLE v6.4.1 — Visit Comparison
+# SLE v6.4.2 — Visit Comparison
 
 New separate section: **Сравнение визитов**.
 

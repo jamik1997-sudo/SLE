@@ -12,6 +12,7 @@ from app.database import get_db
 from app.models import (ActivityLog, Answer, Audit, AuditStatus, Employee, QuestionSetting, Region, Role, ScoreSetting, User, Visit, VisitTiming)
 from app.security import current_user, require_roles
 from app.timezone_utils import to_tashkent_naive
+from pydantic import BaseModel
 
 
 
@@ -178,6 +179,11 @@ def end_visit(audit_id:str,visit_number:int,db:Session=Depends(get_db),user:User
     t=db.scalar(select(VisitTiming).where(VisitTiming.audit_id==audit_id,VisitTiming.visit_number==visit_number))
     if not t: t=VisitTiming(audit_id=audit_id,visit_number=visit_number,started_at=datetime.utcnow());db.add(t)
     t.ended_at=datetime.utcnow();db.commit();return {"ended_at":t.ended_at}
+
+class OfflineTimingIn(BaseModel):
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+
 
 @router.put("/audit/{audit_id}/visit/{visit_number}/offline-timing")
 def offline_timing(audit_id:str,visit_number:int,payload:OfflineTimingIn,db:Session=Depends(get_db),user:User=Depends(current_user)):

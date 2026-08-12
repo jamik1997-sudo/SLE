@@ -1055,6 +1055,17 @@ def submit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(cu
         .where(QuestionSetting.is_active == True)
         .order_by(QuestionSetting.sort_order)
     ).all()
+
+    # v6.4.2: analysis_2 requires a comment for every completed visit.
+    for visit_number in range(1, 6):
+        analysis_answer = next(
+            (a for a in audit.answers if a.visit_number == visit_number and a.question_key == "analysis_2"),
+            None,
+        )
+        if analysis_answer is None or analysis_answer.answer_value not in ("0", "1"):
+            raise HTTPException(422, f"Точка {visit_number}: заполните вопрос «Определяет, что помогло и что помешало достижению целей — навыки»")
+        if not (analysis_answer.comment or "").strip():
+            raise HTTPException(422, f"Точка {visit_number}: обязательный комментарий к вопросу «Определяет, что помогло и что помешало достижению целей — навыки»")
     questions = [
         {"key": q.key, "section": q.section, "step": q.step, "weight": q.weight, "is_active": q.is_active}
         for q in qrows
@@ -1131,7 +1142,6 @@ def submit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(cu
     ))
     db.commit()
     return {"total_score": total, "total_percent": percent, "level": level, "sections": sections}
-
 
 @router.get("/{audit_id}/visit-view")
 def audit_visit_view(
