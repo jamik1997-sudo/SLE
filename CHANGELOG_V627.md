@@ -1,4 +1,4 @@
-# SLE v6.4.3 — Worker DuckDNS Origin
+# SLE v6.4.4 — Worker DuckDNS Origin
 
 - Frontend still uses only `https://sle-api.jamik1997.workers.dev`.
 - Cloudflare Worker origin restored to `https://sle-audit.duckdns.org`.

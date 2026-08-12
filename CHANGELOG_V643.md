@@ -1,4 +1,4 @@
-# SLE v6.4.3
+# SLE v6.4.4
 - Fixed Home refresh crash when `state.me` is temporarily `null`.
 - `mainNav()` now uses optional chaining and a safe role value.
 - `renderHome()` waits for an authenticated user object.
