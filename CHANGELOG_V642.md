@@ -1,4 +1,4 @@
-# SLE v6.4.6
+# SLE v6.4.8
 
 - Permanent backend fix: `OfflineTimingIn(BaseModel)` is defined in `extras.py`.
 - “Последние завершённые аудиты” table layout improved.

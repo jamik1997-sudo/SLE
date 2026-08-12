@@ -1,4 +1,4 @@
-# SLE v6.4.6 — Cloudflare Only
+# SLE v6.4.8 — Cloudflare Only
 
 - Frontend uses only `https://sle-api.jamik1997.workers.dev`.
 - Cloudflare Worker forwards directly to Oracle public IP `http://129.225.120.100`.

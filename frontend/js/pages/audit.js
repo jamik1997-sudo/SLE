@@ -1,9 +1,146 @@
 
+function bindVisitLocationButton(){
+  const btn =
+    $('#gpsBtn') ||
+    $('#locationBtn') ||
+    $('#detectLocation') ||
+    $('#findLocation') ||
+    $('#getLocation') ||
+    document.querySelector('[data-action="location"]') ||
+    [...document.querySelectorAll('button')].find(b=>(b.textContent||'').includes('Определить местоположение'));
+  if(!btn || btn.dataset.gpsBound==='1')return;
+  btn.dataset.gpsBound='1';
+  btn.addEventListener('click',e=>{
+    e.preventDefault();
+    requestVisitLocation(btn);
+  });
+}
+
+
+function requestVisitLocation(button){
+  if(!navigator.geolocation){
+    toast('Геолокация не поддерживается этим браузером');
+    if(button){button.disabled=false;button.textContent='Определить местоположение';}
+    return;
+  }
+
+  if(button){
+    button.disabled=true;
+    button.textContent='Определение местоположения…';
+  }
+
+  navigator.geolocation.getCurrentPosition(
+    pos=>{
+      const coords=pos.coords||{};
+      state.pendingVisit=state.pendingVisit||{};
+      state.pendingVisit.latitude=coords.latitude;
+      state.pendingVisit.longitude=coords.longitude;
+      state.pendingVisit.gps_accuracy=coords.accuracy;
+
+      if(state.audit){
+        state.audit.visits=asArray(state.audit.visits,'visits');
+        let v=state.audit.visits.find(x=>x.visit_number===state.visit);
+        if(!v){
+          v={visit_number:state.visit};
+          state.audit.visits.push(v);
+        }
+        v.latitude=coords.latitude;
+        v.longitude=coords.longitude;
+        v.gps_accuracy=coords.accuracy;
+      }
+
+      if(typeof persistDraft==='function')persistDraft();
+      if(typeof updateNextState==='function')updateNextState();
+
+      const lat=$('#latitude'),lng=$('#longitude'),acc=$('#gpsAccuracy');
+      if(lat)lat.value=coords.latitude;
+      if(lng)lng.value=coords.longitude;
+      if(acc)acc.value=coords.accuracy;
+
+      const status=$('#gpsStatus');
+      if(status)status.textContent=`Определено: ${coords.latitude.toFixed(6)}, ${coords.longitude.toFixed(6)} · точность ±${Math.round(coords.accuracy||0)} м`;
+
+      if(button){
+        button.disabled=false;
+        button.textContent='Обновить местоположение';
+      }
+
+      // Online save is best-effort; offline mode keeps GPS locally.
+      if(navigator.onLine && typeof syncOfflineSnapshot==='function'){
+        syncOfflineSnapshot().catch(err=>console.warn('GPS sync skipped',err));
+      }
+    },
+    err=>{
+      console.warn('Geolocation error',err);
+      toast(geolocationErrorMessage(err));
+      const status=$('#gpsStatus');
+      if(status)status.textContent=geolocationErrorMessage(err);
+      if(button){
+        button.disabled=false;
+        button.textContent='Повторить определение';
+      }
+    },
+    {enableHighAccuracy:true,timeout:15000,maximumAge:0}
+  );
+}
+
+
+function normalizeShopCode(value){
+  return String(value||'')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g,'');
+}
+
+function geolocationErrorMessage(err){
+  if(!err)return 'Не удалось определить местоположение';
+  if(err.code===1)return 'Доступ к геолокации запрещён. Разрешите доступ к местоположению в браузере.';
+  if(err.code===2)return 'Местоположение недоступно. Включите GPS/геолокацию и повторите.';
+  if(err.code===3)return 'Не удалось определить местоположение вовремя. Повторите попытку.';
+  return err.message||'Не удалось определить местоположение';
+}
+
+
+async function syncOfflineSnapshot(){
+  if(!state.audit)return;
+  const rec=(typeof draftRecord==='function')?draftRecord():null;
+  if(rec){
+    try{await offlinePut(rec)}catch(err){console.warn('Offline snapshot save skipped',err)}
+  }
+
+  if(!navigator.onLine || state.offlineSyncing)return;
+  if(typeof isLocalAuditId==='function' && isLocalAuditId(state.audit.id)){
+    if(typeof ensureRemoteAudit==='function'){
+      try{await ensureRemoteAudit()}catch(err){console.warn('Remote audit creation skipped',err);return}
+    }else{
+      return;
+    }
+  }
+
+  if(typeof flushPending==='function'){
+    try{await flushPending()}catch(err){console.warn('Pending sync skipped',err)}
+  }
+}
+
+async function syncStoredOfflineDrafts(){
+  if(!navigator.onLine)return;
+  if(state.audit && ['draft','in_progress'].includes(state.audit.status)){
+    try{
+      const rec=await offlineGet(state.audit.id);
+      if(rec?.dirty || state.offlinePendingSubmit || state.offlineLocalAudit){
+        if(typeof syncOfflineSnapshot==='function')await syncOfflineSnapshot();
+      }
+    }catch(err){
+      console.warn('Stored offline draft sync skipped',err);
+    }
+  }
+}
+
+
 function scheduleFlush(){
   if(state.syncTimer)clearTimeout(state.syncTimer);
   state.syncTimer=setTimeout(()=>{
     if(typeof flushPending==='function')flushPending().catch(()=>{});
-    else if(typeof syncOfflineSnapshot==='function')syncOfflineSnapshot().catch(()=>{});
+    else if(typeof syncOfflineSnapshot==='function')if(typeof syncOfflineSnapshot==='function')syncOfflineSnapshot().catch(()=>{});
   },250);
 }
 
@@ -41,19 +178,7 @@ function isLocalAuditId(id){
 }
 
 
-async function syncStoredOfflineDrafts(){
-  if(!navigator.onLine)return;
-  if(state.audit && ['draft','in_progress'].includes(state.audit.status)){
-    try{
-      const rec=await offlineGet(state.audit.id);
-      if(rec?.dirty || state.offlinePendingSubmit || state.offlineLocalAudit){
-        await syncOfflineSnapshot();
-      }
-    }catch(err){
-      console.warn('Stored offline draft sync skipped',err);
-    }
-  }
-}
+
 
 
 function markVisitTiming(kind,visitNumber){
@@ -66,7 +191,7 @@ function markVisitTiming(kind,visitNumber){
   if(typeof persistDraft==='function')persistDraft();
 }
 
-// v6.4.6 offline-first audit engine\nfunction normalizeShopCode(value){return String(value||'').toUpperCase().replace(/[^A-Z0-9]/g,'')}\nfunction draftStorageKey(id){return 'sle_draft_'+id}\nfunction isLocalAuditId(id){return String(id||'').startsWith('local-')}\nfunction cachedQuestions(){try{return asArray(JSON.parse(localStorage.getItem('sle_questions')||'[]'))}catch{return []}}\nfunction cachedRegions(){try{return asArray(JSON.parse(localStorage.getItem('sle_regions')||'[]'))}catch{return []}}\nfunction makeLocalAudit(createPayload,employee,region){\n  const id='local-'+(crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2)}`);\n  return {id,audit_date:tashkentToday(),region_id:createPayload.region_id,region_name:region?.name||'',employee_id:createPayload.employee_id,employee_name:employee?.full_name||employee?.name||'',status:'draft',current_visit:0,current_step:0,total_score:null,total_percent:null,level:null,visits:[1,2,3,4,5].map(n=>({visit_number:n,shop_code:'',goal:'',latitude:null,longitude:null,gps_accuracy:null,comment:''})),answers:[],_offlineCreate:createPayload};\n}\nfunction draftRecord(){\n  if(!state.audit)return null;\n  return {id:state.audit.id,audit_date:state.audit.audit_date||tashkentToday(),audit:state.audit,current_visit:state.visit,current_step:state.step,pendingSubmit:!!state.offlinePendingSubmit,offlineCreate:state.audit._offlineCreate||null,timings:state.offlineTimings||{},dirty:true,ts:Date.now()};\n}\nasync function restoreLocalAudit(id){\n  let rec=await offlineGet(id);\n  if(!rec){try{const old=JSON.parse(localStorage.getItem(draftStorageKey(id))||'null');if(old)rec={id,audit:{id,status:'draft',answers:old.answers||[],visits:old.visits||[],current_visit:old.current_visit||0,current_step:old.current_step||0,audit_date:tashkentToday()},current_visit:old.current_visit||0,current_step:old.current_step||0,ts:old.ts}}catch{}}\n  if(!rec)return null;\n  const recDate=rec.audit_date||rec.audit?.audit_date||'';\n  if(recDate&&recDate!==tashkentToday()){await offlineDelete(id);localStorage.removeItem(draftStorageKey(id));return null}\n  return rec;\n}\nasync function ensureRemoteAudit(){\n  if(!state.audit||!isLocalAuditId(state.audit.id))return state.audit?.id;\n  if(!navigator.onLine)throw new Error('Нет подключения к интернету');\n  const oldId=state.audit.id;\n  const payload=state.audit._offlineCreate||{};\n  const created=await api('/audits',{method:'POST',body:JSON.stringify(payload),timeout:18000});\n  const remoteId=created.id;\n  state.audit.id=remoteId;delete state.audit._offlineCreate;state.offlineLocalAudit=false;\n  localStorage.removeItem(draftStorageKey(oldId));await offlineDelete(oldId);\n  state.audits=asArray(state.audits,'audits').map(a=>a.id===oldId?{...a,id:remoteId}:a);\n  localStorage.setItem('sle_audits_cache',JSON.stringify(state.audits));\n  persistDraft();\n  return remoteId;\n}\nasync function syncOfflineSnapshot(){\n  if(!state.audit||!navigator.onLine||state.offlineSyncing)return;\n  state.offlineSyncing=true;updateOfflineBanner();\n  try{\n    await ensureRemoteAudit();\n    const qByVisit=new Map();\n    for(const a of asArray(state.audit.answers,'answers')){if(!qByVisit.has(a.visit_number))qByVisit.set(a.visit_number,[]);qByVisit.get(a.visit_number).push({visit_number:a.visit_number,question_key:a.question_key,answer_value:a.answer_value,comment:a.comment??null})}\n    for(const visit of asArray(state.audit.visits,'visits')){\n      const answers=qByVisit.get(visit.visit_number)||[];\n      const visitPayload={shop_code:visit.shop_code||null,goal:visit.goal||null,comment:visit.comment||null,latitude:visit.latitude??null,longitude:visit.longitude??null,gps_accuracy:visit.gps_accuracy??null};\n      if(answers.length||Object.values(visitPayload).some(v=>v!==null&&v!=='')){\n        await api(`/audits/${state.audit.id}/sync`,{method:'PUT',body:JSON.stringify({answers,visit_number:visit.visit_number,visit:visitPayload,current_visit:state.visit,current_step:state.step}),timeout:20000});\n      }\n      const timing=state.offlineTimings?.[visit.visit_number];\n      if(timing?.started_at||timing?.ended_at){await api(`/extras/audit/${state.audit.id}/visit/${visit.visit_number}/offline-timing`,{method:'PUT',body:JSON.stringify(timing),timeout:15000})}\n    }\n    await api(`/audits/${state.audit.id}/sync`,{method:'PUT',body:JSON.stringify({answers:[],current_visit:state.visit,current_step:state.step}),timeout:18000});\n    state.pendingAnswers.clear();state.pendingVisit={};pendingSyncExtra={};\n    if(state.offlinePendingSubmit){\n      const r=await api(`/audits/${state.audit.id}/submit`,{method:'POST',timeout:20000});\n      state.audit={...state.audit,...r,status:'completed'};state.offlinePendingSubmit=false;\n      localStorage.removeItem(draftStorageKey(state.audit.id));await offlineDelete(state.audit.id);\n      if(document.querySelector('#app'))renderResult(state.audit);\n    }else{persistDraft();setSaving('Все данные отправлены')}\n  }finally{state.offlineSyncing=false;updateOfflineBanner();updateNextState()}\n}\nfunction markVisitTiming(kind,visitNumber){\n  if(!visitNumber)return;\n  state.offlineTimings=state.offlineTimings||{};const t=state.offlineTimings[visitNumber]||(state.offlineTimings[visitNumber]={});\n  const now=new Date().toISOString();if(kind==='start'&&!t.started_at)t.started_at=now;if(kind==='end')t.ended_at=now;persistDraft();\n}\n
+// v6.4.8 offline-first audit engine\n\nfunction draftStorageKey(id){return 'sle_draft_'+id}\nfunction isLocalAuditId(id){return String(id||'').startsWith('local-')}\nfunction cachedQuestions(){try{return asArray(JSON.parse(localStorage.getItem('sle_questions')||'[]'))}catch{return []}}\nfunction cachedRegions(){try{return asArray(JSON.parse(localStorage.getItem('sle_regions')||'[]'))}catch{return []}}\nfunction makeLocalAudit(createPayload,employee,region){\n  const id='local-'+(crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2)}`);\n  return {id,audit_date:tashkentToday(),region_id:createPayload.region_id,region_name:region?.name||'',employee_id:createPayload.employee_id,employee_name:employee?.full_name||employee?.name||'',status:'draft',current_visit:0,current_step:0,total_score:null,total_percent:null,level:null,visits:[1,2,3,4,5].map(n=>({visit_number:n,shop_code:'',goal:'',latitude:null,longitude:null,gps_accuracy:null,comment:''})),answers:[],_offlineCreate:createPayload};\n}\nfunction draftRecord(){\n  if(!state.audit)return null;\n  return {id:state.audit.id,audit_date:state.audit.audit_date||tashkentToday(),audit:state.audit,current_visit:state.visit,current_step:state.step,pendingSubmit:!!state.offlinePendingSubmit,offlineCreate:state.audit._offlineCreate||null,timings:state.offlineTimings||{},dirty:true,ts:Date.now()};\n}\nasync function restoreLocalAudit(id){\n  let rec=await offlineGet(id);\n  if(!rec){try{const old=JSON.parse(localStorage.getItem(draftStorageKey(id))||'null');if(old)rec={id,audit:{id,status:'draft',answers:old.answers||[],visits:old.visits||[],current_visit:old.current_visit||0,current_step:old.current_step||0,audit_date:tashkentToday()},current_visit:old.current_visit||0,current_step:old.current_step||0,ts:old.ts}}catch{}}\n  if(!rec)return null;\n  const recDate=rec.audit_date||rec.audit?.audit_date||'';\n  if(recDate&&recDate!==tashkentToday()){await offlineDelete(id);localStorage.removeItem(draftStorageKey(id));return null}\n  return rec;\n}\nasync function ensureRemoteAudit(){\n  if(!state.audit||!isLocalAuditId(state.audit.id))return state.audit?.id;\n  if(!navigator.onLine)throw new Error('Нет подключения к интернету');\n  const oldId=state.audit.id;\n  const payload=state.audit._offlineCreate||{};\n  const created=await api('/audits',{method:'POST',body:JSON.stringify(payload),timeout:18000});\n  const remoteId=created.id;\n  state.audit.id=remoteId;delete state.audit._offlineCreate;state.offlineLocalAudit=false;\n  localStorage.removeItem(draftStorageKey(oldId));await offlineDelete(oldId);\n  state.audits=asArray(state.audits,'audits').map(a=>a.id===oldId?{...a,id:remoteId}:a);\n  localStorage.setItem('sle_audits_cache',JSON.stringify(state.audits));\n  persistDraft();\n  return remoteId;\n}\n\nfunction markVisitTiming(kind,visitNumber){\n  if(!visitNumber)return;\n  state.offlineTimings=state.offlineTimings||{};const t=state.offlineTimings[visitNumber]||(state.offlineTimings[visitNumber]={});\n  const now=new Date().toISOString();if(kind==='start'&&!t.started_at)t.started_at=now;if(kind==='end')t.ended_at=now;persistDraft();\n}\n
 
 function requiresAnswerComment(questionKey){
   return questionKey==='analysis_2';
@@ -274,7 +399,7 @@ async function flushSync(extra={}){
   if(syncDrainPromise)return syncDrainPromise;
 
   syncDrainPromise=(async()=>{
-    if(isLocalAuditId(state.audit?.id)){await syncOfflineSnapshot();return}
+    if(isLocalAuditId(state.audit?.id)){if(typeof syncOfflineSnapshot==='function')await syncOfflineSnapshot();return}
     while(true){
       if(!navigator.onLine){setSaving('Нет сети — изменения сохранены на устройстве');return}
 
@@ -474,3 +599,25 @@ function updateNextState(){
     }
   }
 }
+
+
+document.addEventListener('click',e=>{
+  const btn=e.target.closest?.('button');
+  if(!btn)return;
+  const text=(btn.textContent||'').trim();
+  const isGps =
+    btn.id==='gpsBtn' ||
+    btn.id==='locationBtn' ||
+    btn.id==='detectLocation' ||
+    btn.id==='findLocation' ||
+    btn.id==='getLocation' ||
+    btn.dataset.action==='location' ||
+    text.includes('Определить местоположение') ||
+    text.includes('Повторить определение') ||
+    text.includes('Обновить местоположение');
+  if(!isGps || btn.dataset.gpsDirect==='1')return;
+  btn.dataset.gpsDirect='1';
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  requestVisitLocation(btn);
+},{capture:true});
