@@ -1,3 +1,5 @@
+import time
+import os
 import json
 from datetime import datetime
 from io import BytesIO
@@ -99,6 +101,8 @@ def _legacy_visit_goal_and_comment(visit=None, audit=None):
 
     return goal or "—", comment or "—"
 
+
+SLE_PROCESS_STARTED_AT = time.time()
 
 router = APIRouter(prefix="/extras", tags=["extras"])
 
@@ -202,6 +206,49 @@ def timings(audit_id:str,db:Session=Depends(get_db),user:User=Depends(current_us
     rows=db.scalars(select(VisitTiming).where(VisitTiming.audit_id==audit_id).order_by(VisitTiming.visit_number)).all()
     return [{"visit_number":x.visit_number,"started_at":x.started_at,"ended_at":x.ended_at,"minutes":round((x.ended_at-x.started_at).total_seconds()/60,1) if x.started_at and x.ended_at else None} for x in rows]
 
+
+
+@router.get("/system-status")
+def system_status(db: Session = Depends(get_db), user: User = Depends(require_roles(Role.admin))):
+    started = time.perf_counter()
+    db_ok = True
+    db_ms = None
+    db_error = None
+    try:
+        db_started = time.perf_counter()
+        db.execute(text("SELECT 1"))
+        db_ms = round((time.perf_counter() - db_started) * 1000, 1)
+    except Exception as exc:
+        db_ok = False
+        db_error = str(exc)[:240]
+
+    try:
+        l1, l5, l15 = os.getloadavg()
+        load = {"1m": round(l1,2), "5m": round(l5,2), "15m": round(l15,2)}
+    except Exception:
+        load = None
+
+    pool = None
+    try:
+        eng = db.get_bind()
+        p = getattr(eng, "pool", None)
+        if p is not None:
+            pool = {
+                "size": p.size() if hasattr(p,"size") else None,
+                "checked_out": p.checkedout() if hasattr(p,"checkedout") else None,
+                "overflow": p.overflow() if hasattr(p,"overflow") else None,
+                "checked_in": p.checkedin() if hasattr(p,"checkedin") else None,
+            }
+    except Exception:
+        pass
+
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "api": {"ok": True, "response_ms": round((time.perf_counter()-started)*1000,1), "pid": os.getpid(), "uptime_seconds": int(time.time()-SLE_PROCESS_STARTED_AT)},
+        "database": {"ok": db_ok, "response_ms": db_ms, "error": db_error},
+        "load": load,
+        "pool": pool,
+    }
 
 @router.get("/questionnaire-report")
 def questionnaire_report(

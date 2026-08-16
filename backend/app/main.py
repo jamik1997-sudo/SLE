@@ -9,7 +9,7 @@ from app.config import get_settings
 from app.routers import admin, audits, auth, extras
 
 settings = get_settings()
-app = FastAPI(title="SLE Audit API", version="6.5.0")
+app = FastAPI(title="SLE Audit API", version="6.5.1")
 
 app.add_middleware(GZipMiddleware, minimum_size=700)
 # CORS добавляется последним: он становится внешним middleware Starlette,

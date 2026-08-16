@@ -1,5 +1,5 @@
-# SLE v6.5.0
+# SLE v6.5.1
 - Fixed `draftStorageKey is not defined`.
 - Rechecked and completed offline helper chain.
 - Added safe definitions for local-audit helpers used by Offline Mode.
-- Bumped frontend cache version to 6.5.0.
+- Bumped frontend cache version to 6.5.1.

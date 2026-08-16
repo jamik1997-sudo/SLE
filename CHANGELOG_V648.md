@@ -1,4 +1,4 @@
-# SLE v6.5.0
+# SLE v6.5.1
 - Fixed `normalizeShopCode is not defined`.
 - `normalizeShopCode()` is now a verified top-level helper and accepts only A-Z / 0-9.
 - Reworked GPS acquisition with a dedicated top-level `requestVisitLocation()`.
@@ -6,4 +6,4 @@
 - GPS coordinates are persisted locally for Offline Mode and synced when online.
 - Added delegated GPS button binding so render timing cannot break the location button.
 - Reverified critical Offline Mode helpers are top-level.
-- Bumped cache version to 6.5.0.
+- Bumped cache version to 6.5.1.
