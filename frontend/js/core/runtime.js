@@ -175,7 +175,7 @@ async function api(path,opt={}){
         if(externalSignal.aborted)controller.abort(externalSignal.reason);
         else externalSignal.addEventListener('abort',abortFromExternal,{once:true});
       }
-      const timeoutMs=opt.timeout||(method==='GET'?(attempt===0?8000:12000):15000);
+      const timeoutMs=opt.timeout||(method==='GET'?(attempt===0?7000:10000):12000);
       const timeout=setTimeout(()=>controller.abort(),timeoutMs);
       const headers={...authHeaders(),...(opt.headers||{})};
       if(opt.body!=null)headers['Content-Type']='application/json';

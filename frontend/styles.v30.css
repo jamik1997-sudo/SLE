@@ -80,7 +80,7 @@ input[readonly]{opacity:.9;cursor:not-allowed}
 .brand-home{appearance:none;border:0;background:transparent;color:inherit;padding:4px 2px;cursor:pointer;font:inherit}.brand-home:hover{opacity:.82}.brand-home:focus-visible{outline:3px solid rgba(255,212,0,.35);outline-offset:4px;border-radius:8px}
 
 
-/* v6.4.8 — compact recent audits table */
+/* v6.5.0 — compact recent audits table */
 .nowrap{white-space:nowrap}
 .recent-audits-wrap{overflow-x:auto}
 .recent-audits-table{min-width:980px;table-layout:auto}
@@ -102,7 +102,7 @@ input[readonly]{opacity:.9;cursor:not-allowed}
 .required-analysis-comment textarea:focus{min-height:86px}
 
 
-/* v6.4.8 dashboard width and one-line employee names */
+/* v6.5.0 dashboard width and one-line employee names */
 .shell .container{width:min(96vw,1600px);max-width:1600px}
 .recent-audits-table .employee-col{min-width:260px;max-width:none}
 .employee-nowrap{white-space:nowrap;display:inline-block}

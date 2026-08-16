@@ -17,10 +17,11 @@ engine_kwargs = {
 }
 if not is_sqlite:
     engine_kwargs.update({
-        "pool_size": 3,
+        "pool_size": 4,
         "max_overflow": 2,
-        "pool_recycle": 300,
-        "pool_timeout": 15,
+        "pool_recycle": 600,
+        "pool_timeout": 8,
+        "pool_use_lifo": True,
     })
 engine = create_engine(settings.database_url, **engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)

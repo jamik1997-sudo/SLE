@@ -65,10 +65,9 @@ function requestVisitLocation(button){
         button.textContent='Обновить местоположение';
       }
 
-      // Online save is best-effort; offline mode keeps GPS locally.
-      if(navigator.onLine && typeof syncOfflineSnapshot==='function'){
-        syncOfflineSnapshot().catch(err=>console.warn('GPS sync skipped',err));
-      }
+      // GPS is saved locally immediately; online upload joins the same debounced
+      // autosave queue so several users do not create extra parallel requests.
+      if(navigator.onLine && typeof scheduleSync==='function')scheduleSync(300);
     },
     err=>{
       console.warn('Geolocation error',err);
@@ -140,7 +139,7 @@ function scheduleFlush(){
   if(state.syncTimer)clearTimeout(state.syncTimer);
   state.syncTimer=setTimeout(()=>{
     if(typeof flushPending==='function')flushPending().catch(()=>{});
-    else if(typeof syncOfflineSnapshot==='function')if(typeof syncOfflineSnapshot==='function')syncOfflineSnapshot().catch(()=>{});
+    else if(typeof syncOfflineSnapshot==='function')syncOfflineSnapshot().catch(()=>{});
   },250);
 }
 
@@ -191,7 +190,7 @@ function markVisitTiming(kind,visitNumber){
   if(typeof persistDraft==='function')persistDraft();
 }
 
-// v6.4.8 offline-first audit engine\n\nfunction draftStorageKey(id){return 'sle_draft_'+id}\nfunction isLocalAuditId(id){return String(id||'').startsWith('local-')}\nfunction cachedQuestions(){try{return asArray(JSON.parse(localStorage.getItem('sle_questions')||'[]'))}catch{return []}}\nfunction cachedRegions(){try{return asArray(JSON.parse(localStorage.getItem('sle_regions')||'[]'))}catch{return []}}\nfunction makeLocalAudit(createPayload,employee,region){\n  const id='local-'+(crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2)}`);\n  return {id,audit_date:tashkentToday(),region_id:createPayload.region_id,region_name:region?.name||'',employee_id:createPayload.employee_id,employee_name:employee?.full_name||employee?.name||'',status:'draft',current_visit:0,current_step:0,total_score:null,total_percent:null,level:null,visits:[1,2,3,4,5].map(n=>({visit_number:n,shop_code:'',goal:'',latitude:null,longitude:null,gps_accuracy:null,comment:''})),answers:[],_offlineCreate:createPayload};\n}\nfunction draftRecord(){\n  if(!state.audit)return null;\n  return {id:state.audit.id,audit_date:state.audit.audit_date||tashkentToday(),audit:state.audit,current_visit:state.visit,current_step:state.step,pendingSubmit:!!state.offlinePendingSubmit,offlineCreate:state.audit._offlineCreate||null,timings:state.offlineTimings||{},dirty:true,ts:Date.now()};\n}\nasync function restoreLocalAudit(id){\n  let rec=await offlineGet(id);\n  if(!rec){try{const old=JSON.parse(localStorage.getItem(draftStorageKey(id))||'null');if(old)rec={id,audit:{id,status:'draft',answers:old.answers||[],visits:old.visits||[],current_visit:old.current_visit||0,current_step:old.current_step||0,audit_date:tashkentToday()},current_visit:old.current_visit||0,current_step:old.current_step||0,ts:old.ts}}catch{}}\n  if(!rec)return null;\n  const recDate=rec.audit_date||rec.audit?.audit_date||'';\n  if(recDate&&recDate!==tashkentToday()){await offlineDelete(id);localStorage.removeItem(draftStorageKey(id));return null}\n  return rec;\n}\nasync function ensureRemoteAudit(){\n  if(!state.audit||!isLocalAuditId(state.audit.id))return state.audit?.id;\n  if(!navigator.onLine)throw new Error('Нет подключения к интернету');\n  const oldId=state.audit.id;\n  const payload=state.audit._offlineCreate||{};\n  const created=await api('/audits',{method:'POST',body:JSON.stringify(payload),timeout:18000});\n  const remoteId=created.id;\n  state.audit.id=remoteId;delete state.audit._offlineCreate;state.offlineLocalAudit=false;\n  localStorage.removeItem(draftStorageKey(oldId));await offlineDelete(oldId);\n  state.audits=asArray(state.audits,'audits').map(a=>a.id===oldId?{...a,id:remoteId}:a);\n  localStorage.setItem('sle_audits_cache',JSON.stringify(state.audits));\n  persistDraft();\n  return remoteId;\n}\n\nfunction markVisitTiming(kind,visitNumber){\n  if(!visitNumber)return;\n  state.offlineTimings=state.offlineTimings||{};const t=state.offlineTimings[visitNumber]||(state.offlineTimings[visitNumber]={});\n  const now=new Date().toISOString();if(kind==='start'&&!t.started_at)t.started_at=now;if(kind==='end')t.ended_at=now;persistDraft();\n}\n
+// v6.5.0 offline-first audit engine\n\nfunction draftStorageKey(id){return 'sle_draft_'+id}\nfunction isLocalAuditId(id){return String(id||'').startsWith('local-')}\nfunction cachedQuestions(){try{return asArray(JSON.parse(localStorage.getItem('sle_questions')||'[]'))}catch{return []}}\nfunction cachedRegions(){try{return asArray(JSON.parse(localStorage.getItem('sle_regions')||'[]'))}catch{return []}}\nfunction makeLocalAudit(createPayload,employee,region){\n  const id='local-'+(crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2)}`);\n  return {id,audit_date:tashkentToday(),region_id:createPayload.region_id,region_name:region?.name||'',employee_id:createPayload.employee_id,employee_name:employee?.full_name||employee?.name||'',status:'draft',current_visit:0,current_step:0,total_score:null,total_percent:null,level:null,visits:[1,2,3,4,5].map(n=>({visit_number:n,shop_code:'',goal:'',latitude:null,longitude:null,gps_accuracy:null,comment:''})),answers:[],_offlineCreate:createPayload};\n}\nfunction draftRecord(){\n  if(!state.audit)return null;\n  return {id:state.audit.id,audit_date:state.audit.audit_date||tashkentToday(),audit:state.audit,current_visit:state.visit,current_step:state.step,pendingSubmit:!!state.offlinePendingSubmit,offlineCreate:state.audit._offlineCreate||null,timings:state.offlineTimings||{},dirty:true,ts:Date.now()};\n}\nasync function restoreLocalAudit(id){\n  let rec=await offlineGet(id);\n  if(!rec){try{const old=JSON.parse(localStorage.getItem(draftStorageKey(id))||'null');if(old)rec={id,audit:{id,status:'draft',answers:old.answers||[],visits:old.visits||[],current_visit:old.current_visit||0,current_step:old.current_step||0,audit_date:tashkentToday()},current_visit:old.current_visit||0,current_step:old.current_step||0,ts:old.ts}}catch{}}\n  if(!rec)return null;\n  const recDate=rec.audit_date||rec.audit?.audit_date||'';\n  if(recDate&&recDate!==tashkentToday()){await offlineDelete(id);localStorage.removeItem(draftStorageKey(id));return null}\n  return rec;\n}\nasync function ensureRemoteAudit(){\n  if(!state.audit||!isLocalAuditId(state.audit.id))return state.audit?.id;\n  if(!navigator.onLine)throw new Error('Нет подключения к интернету');\n  const oldId=state.audit.id;\n  const payload=state.audit._offlineCreate||{};\n  const created=await api('/audits',{method:'POST',body:JSON.stringify(payload),timeout:18000});\n  const remoteId=created.id;\n  state.audit.id=remoteId;delete state.audit._offlineCreate;state.offlineLocalAudit=false;\n  localStorage.removeItem(draftStorageKey(oldId));await offlineDelete(oldId);\n  state.audits=asArray(state.audits,'audits').map(a=>a.id===oldId?{...a,id:remoteId}:a);\n  localStorage.setItem('sle_audits_cache',JSON.stringify(state.audits));\n  persistDraft();\n  return remoteId;\n}\n\nfunction markVisitTiming(kind,visitNumber){\n  if(!visitNumber)return;\n  state.offlineTimings=state.offlineTimings||{};const t=state.offlineTimings[visitNumber]||(state.offlineTimings[visitNumber]={});\n  const now=new Date().toISOString();if(kind==='start'&&!t.started_at)t.started_at=now;if(kind==='end')t.ended_at=now;persistDraft();\n}\n
 
 function requiresAnswerComment(questionKey){
   return questionKey==='analysis_2';
@@ -347,6 +346,7 @@ function updateNextStateBase(){
 function setSaving(t){const s=$('#saveState');if(s)s.textContent=t;updateNextState()}
 let syncDrainPromise=null;
 let pendingSyncExtra={};
+let lastSyncStartedAt=0;
 
 function updateLocalAnswer(visit,key,value){
   let found=state.audit.answers.find(a=>a.visit_number===visit&&a.question_key===key);
@@ -354,7 +354,7 @@ function updateLocalAnswer(visit,key,value){
   else{found={visit_number:visit,question_key:key,answer_value:value,comment:null};state.audit.answers.push(found)}
   state.pendingAnswers.set(`${visit}:${key}`,found);
   persistDraft();
-  scheduleSync(650);
+  scheduleSync(1100);
   updateNextState();
 }
 
@@ -384,7 +384,7 @@ function persistDraft(){
   localStorage.setItem(draftStorageKey(state.audit.id),JSON.stringify({answers:state.audit.answers,visits:state.audit.visits,current_visit:state.visit,current_step:state.step,ts:Date.now(),audit_date:state.audit.audit_date,pendingSubmit:state.offlinePendingSubmit,timings:state.offlineTimings}));
   offlinePut(record).catch(()=>{});updateOfflineBanner();
 }
-function scheduleSync(delay=900){
+function scheduleSync(delay=1100){
   if(!navigator.onLine){persistDraft();setSaving('Офлайн — изменения сохранены на устройстве');return}
   setSaving('Сохранение…');
   clearTimeout(state.syncTimer);
@@ -399,6 +399,9 @@ async function flushSync(extra={}){
   if(syncDrainPromise)return syncDrainPromise;
 
   syncDrainPromise=(async()=>{
+    const sinceLast=Date.now()-lastSyncStartedAt;
+    if(sinceLast<250)await new Promise(r=>setTimeout(r,250-sinceLast));
+    lastSyncStartedAt=Date.now();
     if(isLocalAuditId(state.audit?.id)){if(typeof syncOfflineSnapshot==='function')await syncOfflineSnapshot();return}
     while(true){
       if(!navigator.onLine){setSaving('Нет сети — изменения сохранены на устройстве');return}
