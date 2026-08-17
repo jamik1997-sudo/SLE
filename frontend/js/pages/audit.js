@@ -190,7 +190,7 @@ function markVisitTiming(kind,visitNumber){
   if(typeof persistDraft==='function')persistDraft();
 }
 
-// v6.5.1 offline-first audit engine\n\nfunction draftStorageKey(id){return 'sle_draft_'+id}\nfunction isLocalAuditId(id){return String(id||'').startsWith('local-')}\nfunction cachedQuestions(){try{return asArray(JSON.parse(localStorage.getItem('sle_questions')||'[]'))}catch{return []}}\nfunction cachedRegions(){try{return asArray(JSON.parse(localStorage.getItem('sle_regions')||'[]'))}catch{return []}}\nfunction makeLocalAudit(createPayload,employee,region){\n  const id='local-'+(crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2)}`);\n  return {id,audit_date:tashkentToday(),region_id:createPayload.region_id,region_name:region?.name||'',employee_id:createPayload.employee_id,employee_name:employee?.full_name||employee?.name||'',status:'draft',current_visit:0,current_step:0,total_score:null,total_percent:null,level:null,visits:[1,2,3,4,5].map(n=>({visit_number:n,shop_code:'',goal:'',latitude:null,longitude:null,gps_accuracy:null,comment:''})),answers:[],_offlineCreate:createPayload};\n}\nfunction draftRecord(){\n  if(!state.audit)return null;\n  return {id:state.audit.id,audit_date:state.audit.audit_date||tashkentToday(),audit:state.audit,current_visit:state.visit,current_step:state.step,pendingSubmit:!!state.offlinePendingSubmit,offlineCreate:state.audit._offlineCreate||null,timings:state.offlineTimings||{},dirty:true,ts:Date.now()};\n}\nasync function restoreLocalAudit(id){\n  let rec=await offlineGet(id);\n  if(!rec){try{const old=JSON.parse(localStorage.getItem(draftStorageKey(id))||'null');if(old)rec={id,audit:{id,status:'draft',answers:old.answers||[],visits:old.visits||[],current_visit:old.current_visit||0,current_step:old.current_step||0,audit_date:tashkentToday()},current_visit:old.current_visit||0,current_step:old.current_step||0,ts:old.ts}}catch{}}\n  if(!rec)return null;\n  const recDate=rec.audit_date||rec.audit?.audit_date||'';\n  if(recDate&&recDate!==tashkentToday()){await offlineDelete(id);localStorage.removeItem(draftStorageKey(id));return null}\n  return rec;\n}\nasync function ensureRemoteAudit(){\n  if(!state.audit||!isLocalAuditId(state.audit.id))return state.audit?.id;\n  if(!navigator.onLine)throw new Error('Нет подключения к интернету');\n  const oldId=state.audit.id;\n  const payload=state.audit._offlineCreate||{};\n  const created=await api('/audits',{method:'POST',body:JSON.stringify(payload),timeout:18000});\n  const remoteId=created.id;\n  state.audit.id=remoteId;delete state.audit._offlineCreate;state.offlineLocalAudit=false;\n  localStorage.removeItem(draftStorageKey(oldId));await offlineDelete(oldId);\n  state.audits=asArray(state.audits,'audits').map(a=>a.id===oldId?{...a,id:remoteId}:a);\n  localStorage.setItem('sle_audits_cache',JSON.stringify(state.audits));\n  persistDraft();\n  return remoteId;\n}\n\nfunction markVisitTiming(kind,visitNumber){\n  if(!visitNumber)return;\n  state.offlineTimings=state.offlineTimings||{};const t=state.offlineTimings[visitNumber]||(state.offlineTimings[visitNumber]={});\n  const now=new Date().toISOString();if(kind==='start'&&!t.started_at)t.started_at=now;if(kind==='end')t.ended_at=now;persistDraft();\n}\n
+// v6.5.2 offline-first audit engine\n\nfunction draftStorageKey(id){return 'sle_draft_'+id}\nfunction isLocalAuditId(id){return String(id||'').startsWith('local-')}\nfunction cachedQuestions(){try{return asArray(JSON.parse(localStorage.getItem('sle_questions')||'[]'))}catch{return []}}\nfunction cachedRegions(){try{return asArray(JSON.parse(localStorage.getItem('sle_regions')||'[]'))}catch{return []}}\nfunction makeLocalAudit(createPayload,employee,region){\n  const id='local-'+(crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2)}`);\n  return {id,audit_date:tashkentToday(),region_id:createPayload.region_id,region_name:region?.name||'',employee_id:createPayload.employee_id,employee_name:employee?.full_name||employee?.name||'',status:'draft',current_visit:0,current_step:0,total_score:null,total_percent:null,level:null,visits:[1,2,3,4,5].map(n=>({visit_number:n,shop_code:'',goal:'',latitude:null,longitude:null,gps_accuracy:null,comment:''})),answers:[],_offlineCreate:createPayload};\n}\nfunction draftRecord(){\n  if(!state.audit)return null;\n  return {id:state.audit.id,audit_date:state.audit.audit_date||tashkentToday(),audit:state.audit,current_visit:state.visit,current_step:state.step,pendingSubmit:!!state.offlinePendingSubmit,offlineCreate:state.audit._offlineCreate||null,timings:state.offlineTimings||{},dirty:true,ts:Date.now()};\n}\nasync function restoreLocalAudit(id){\n  let rec=await offlineGet(id);\n  if(!rec){try{const old=JSON.parse(localStorage.getItem(draftStorageKey(id))||'null');if(old)rec={id,audit:{id,status:'draft',answers:old.answers||[],visits:old.visits||[],current_visit:old.current_visit||0,current_step:old.current_step||0,audit_date:tashkentToday()},current_visit:old.current_visit||0,current_step:old.current_step||0,ts:old.ts}}catch{}}\n  if(!rec)return null;\n  const recDate=rec.audit_date||rec.audit?.audit_date||'';\n  if(recDate&&recDate!==tashkentToday()){await offlineDelete(id);localStorage.removeItem(draftStorageKey(id));return null}\n  return rec;\n}\nasync function ensureRemoteAudit(){\n  if(!state.audit||!isLocalAuditId(state.audit.id))return state.audit?.id;\n  if(!navigator.onLine)throw new Error('Нет подключения к интернету');\n  const oldId=state.audit.id;\n  const payload=state.audit._offlineCreate||{};\n  const created=await api('/audits',{method:'POST',body:JSON.stringify(payload),timeout:18000});\n  const remoteId=created.id;\n  state.audit.id=remoteId;delete state.audit._offlineCreate;state.offlineLocalAudit=false;\n  localStorage.removeItem(draftStorageKey(oldId));await offlineDelete(oldId);\n  state.audits=asArray(state.audits,'audits').map(a=>a.id===oldId?{...a,id:remoteId}:a);\n  localStorage.setItem('sle_audits_cache',JSON.stringify(state.audits));\n  persistDraft();\n  return remoteId;\n}\n\nfunction markVisitTiming(kind,visitNumber){\n  if(!visitNumber)return;\n  state.offlineTimings=state.offlineTimings||{};const t=state.offlineTimings[visitNumber]||(state.offlineTimings[visitNumber]={});\n  const now=new Date().toISOString();if(kind==='start'&&!t.started_at)t.started_at=now;if(kind==='end')t.ended_at=now;persistDraft();\n}\n
 
 function requiresAnswerComment(questionKey){
   return questionKey==='analysis_2';
@@ -338,7 +338,8 @@ function updateNextStateBase(){
   if(!b)return;
   const cooldownLeft=Math.max(0,(state.navigationCooldownUntil||0)-Date.now());
   const saved=!navigator.onLine||(!state.syncing&&!state.pendingAnswers.size&&!Object.keys(state.pendingVisit).length);updateOfflineBanner();
-  b.disabled=!!state.navigationBusy||cooldownLeft>0||!(saved&&currentComplete());
+  const adminForceReady=state.step===8&&state.me?.role==='admin'&&saved;
+  b.disabled=!!state.navigationBusy||cooldownLeft>0||!(adminForceReady||(saved&&currentComplete()));
   b.setAttribute('aria-busy',state.navigationBusy?'true':'false');
   if(state.navigationCooldownTimer){clearTimeout(state.navigationCooldownTimer);state.navigationCooldownTimer=null}
   if(cooldownLeft>0){state.navigationCooldownTimer=setTimeout(()=>{state.navigationCooldownTimer=null;updateNextState()},cooldownLeft+30)}
@@ -350,7 +351,7 @@ let lastSyncStartedAt=0;
 
 function updateLocalAnswer(visit,key,value){
   let found=state.audit.answers.find(a=>a.visit_number===visit&&a.question_key===key);
-  if(found){found.answer_value=value;found.comment=null}
+  if(found){found.answer_value=value}
   else{found={visit_number:visit,question_key:key,answer_value:value,comment:null};state.audit.answers.push(found)}
   state.pendingAnswers.set(`${visit}:${key}`,found);
   persistDraft();
@@ -407,7 +408,7 @@ async function flushSync(extra={}){
       if(!navigator.onLine){setSaving('Нет сети — изменения сохранены на устройстве');return}
 
       const answers=[...state.pendingAnswers.values()].map(a=>({
-        visit_number:a.visit_number,question_key:a.question_key,answer_value:a.answer_value,comment:null
+        visit_number:a.visit_number,question_key:a.question_key,answer_value:a.answer_value,comment:a.comment??null
       }));
       const visitPayload=Object.keys(state.pendingVisit||{}).length?{...state.pendingVisit}:null;
       const extraPayload={...pendingSyncExtra};
@@ -418,13 +419,13 @@ async function flushSync(extra={}){
       const payload={answers,current_visit:state.visit,current_step:state.step,...extraPayload};
       if(visitPayload&&state.visit){payload.visit_number=state.visit;payload.visit=visitPayload}
 
-      const sentAnswers=new Map(answers.map(a=>[`${a.visit_number}:${a.question_key}`,a.answer_value]));
+      const sentAnswers=new Map(answers.map(a=>[`${a.visit_number}:${a.question_key}`,{answer_value:a.answer_value,comment:a.comment??null}]));
       state.syncing=api(`/audits/${state.audit.id}/sync`,{method:'PUT',body:JSON.stringify(payload),timeout:18000});
       try{
         await state.syncing;
-        for(const [key,value] of sentAnswers){
+        for(const [key,sent] of sentAnswers){
           const current=state.pendingAnswers.get(key);
-          if(current&&current.answer_value===value)state.pendingAnswers.delete(key);
+          if(current&&current.answer_value===sent.answer_value&&(current.comment??null)===sent.comment)state.pendingAnswers.delete(key);
         }
         if(visitPayload){
           for(const [key,value] of Object.entries(visitPayload)){
@@ -460,6 +461,71 @@ function saveVisitFields(extra={}){if(!state.visit||!state.audit)return;const vi
 function captureGps(){if(!navigator.geolocation)return toast('Геолокация не поддерживается на этом устройстве');const btn=$('#gps');if(btn){btn.disabled=true;btn.textContent='Определение местоположения…'}navigator.geolocation.getCurrentPosition(async p=>{try{saveVisitFields({latitude:p.coords.latitude,longitude:p.coords.longitude,gps_accuracy:p.coords.accuracy});await flushSync();toast('GPS-координаты сохранены');renderWizard()}catch(e){toast(e.message)}},e=>{if(btn){btn.disabled=false;btn.textContent='Определить местоположение'};const messages={1:'Доступ к геолокации запрещён',2:'Местоположение недоступно',3:'Превышено время ожидания GPS'};toast(messages[e.code]||('Не удалось определить местоположение: '+e.message))},{enableHighAccuracy:true,timeout:25000,maximumAge:0})}
 function currentComplete(){const map=answersMap(),qs=state.questions.filter(q=>q.step===state.step),visit=[0,8].includes(state.step)?0:state.visit;if(qs.some(q=>!map[`${visit}:${q.key}`]))return false;if(state.step===1){const v=state.audit.visits.find(x=>x.visit_number===state.visit);if(!v.shop_code||!v.goal||v.latitude==null||v.longitude==null)return false}return true}
 async function saveProgress(){await flushSync({current_visit:state.visit,current_step:state.step})}
+
+
+function goToFirstMissingAuditField(err){
+  const detail=err?.data?.detail||err?.detail||null;
+  const missing=(detail&&typeof detail==='object'&&Array.isArray(detail.missing))?detail.missing:[];
+  let target=null;
+  if(missing.length){
+    const raw=String(missing[0]||'');
+    let m=raw.match(/^(\d+):([^:]+)$/);
+    if(m){
+      const visit=Number(m[1]),key=m[2];
+      const q=asArray(state.questions,'questions').find(x=>x.key===key);
+      if(q)target={visit:(Number(q.step)===0||Number(q.step)===8)?0:visit,step:Number(q.step)};
+    }else{
+      m=raw.match(/^visit:(\d+):(missing|shop_code|goal|gps)$/);
+      if(m)target={visit:Number(m[1]),step:1};
+    }
+  }
+  if(!target){
+    const msg=String(err?.message||'');
+    const m=msg.match(/Точка\s+(\d+)/i);
+    if(m&&/комментарий|Определяет, что помогло|заполните вопрос/i.test(msg))
+      target={visit:Number(m[1]),step:7};
+  }
+  if(!target)return false;
+  state.visit=target.visit; state.step=target.step; persistDraft(); renderWizard();
+  queueMicrotask(()=>{
+    const el=document.querySelector('[data-required-comment="analysis_2"] textarea')||
+      document.querySelector('#shopCode')||document.querySelector('#visitGoal')||
+      document.querySelector('.question .answer');
+    el?.scrollIntoView?.({behavior:'smooth',block:'center'}); el?.focus?.();
+  });
+  return true;
+}
+
+async function submitAuditWithAdminOverride(){
+  const url=`/audits/${state.audit.id}/submit`;
+  try{
+    return await api(url,{method:'POST'});
+  }catch(err){
+    if(state.me?.role!=='admin'){goToFirstMissingAuditField(err);throw err;}
+
+    const detail=err?.data?.detail||err?.detail||null;
+    const missing=detail&&typeof detail==='object'?(detail.missing_labels||[]):[];
+    const isIncomplete =
+      err?.status===422 ||
+      /заполнен не полностью|обязательный комментарий|заполните вопрос|заполните/i.test(err?.message||'');
+
+    if(!isIncomplete)throw err;
+
+    const preview=missing.length
+      ? '\n\nНе заполнено:\n• '+missing.slice(0,8).join('\n• ')+(missing.length>8?`\n• … ещё ${missing.length-8}`:'')
+      : '';
+
+    const ok=confirm(
+      'В аудите есть незаполненные обязательные поля.'+
+      preview+
+      '\n\nАдминистратор может завершить аудит принудительно. Отправить результат всё равно?'
+    );
+    if(!ok){goToFirstMissingAuditField(err);throw err;}
+
+    return await api(url+'?force=true',{method:'POST'});
+  }
+}
+
 async function nextStep(){
   if(state.navigationBusy||Date.now()<(state.navigationCooldownUntil||0))return;
   const button=$('#next');
@@ -468,13 +534,14 @@ async function nextStep(){
   if(button){button.disabled=true;button.setAttribute('aria-busy','true')}
   const fromVisit=state.visit,fromStep=state.step;
   try{
-    if(!currentComplete())throw new Error('Заполните код ТТ, цель визита, определите GPS и ответьте на все вопросы');
+    if(!currentComplete()&&!(fromStep===8&&state.me?.role==='admin'))
+      throw new Error('Заполните код ТТ, цель визита, определите GPS и ответьте на все вопросы');
     if(fromStep===8){
       persistDraft();
       if(!navigator.onLine){state.offlinePendingSubmit=true;persistDraft();setSaving('Офлайн — аудит ожидает отправки');return renderOfflinePendingResult()}
       await flushSync();
       try{
-        const r=await api(`/audits/${state.audit.id}/submit`,{method:'POST'});
+        const r=await submitAuditWithAdminOverride();
         state.audit={...state.audit,...r,status:'completed'};
         return renderResult(state.audit);
       }catch(err){
@@ -576,9 +643,10 @@ function ensureRequiredAnalysisComment(){
         state.pendingAnswers.set(`${state.visit}:${qKey}`,placeholder);
       }
       persistDraft();
+      if(typeof scheduleSync==='function')scheduleSync(700);
       updateNextState();
     });
-    ta.addEventListener('change',()=>{if(typeof scheduleFlush==='function')scheduleFlush();});
+    ta.addEventListener('change',()=>{if(typeof scheduleSync==='function')scheduleSync(250);});
   }
 }
 

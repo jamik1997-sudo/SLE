@@ -1044,11 +1044,13 @@ def batch_sync(audit_id: str, payload: BatchSyncIn, db: Session = Depends(get_db
 
 
 @router.post("/{audit_id}/submit")
-def submit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def submit(audit_id: str, force: bool = False, db: Session = Depends(get_db), user: User = Depends(current_user)):
     # Загружаем аудит и затем читаем ответы/визиты отдельными запросами.
     # Это исключает устаревшие relationship-коллекции после автосохранения.
     audit = load_audit_basic(db, audit_id)
     ensure_access(user, audit, write=True)
+    if force and user.role != Role.admin:
+        raise HTTPException(403, "Принудительное завершение доступно только администратору")
 
     qrows = db.scalars(
         select(QuestionSetting)
@@ -1056,16 +1058,6 @@ def submit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(cu
         .order_by(QuestionSetting.sort_order)
     ).all()
 
-    # v6.5.1: analysis_2 requires a comment for every completed visit.
-    for visit_number in range(1, 6):
-        analysis_answer = next(
-            (a for a in audit.answers if a.visit_number == visit_number and a.question_key == "analysis_2"),
-            None,
-        )
-        if analysis_answer is None or analysis_answer.answer_value not in ("0", "1"):
-            raise HTTPException(422, f"Точка {visit_number}: заполните вопрос «Определяет, что помогло и что помешало достижению целей — навыки»")
-        if not (analysis_answer.comment or "").strip():
-            raise HTTPException(422, f"Точка {visit_number}: обязательный комментарий к вопросу «Определяет, что помогло и что помешало достижению целей — навыки»")
     questions = [
         {"key": q.key, "section": q.section, "step": q.step, "weight": q.weight, "is_active": q.is_active}
         for q in qrows
@@ -1076,6 +1068,22 @@ def submit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(cu
         select(Visit).where(Visit.audit_id == audit.id).order_by(Visit.visit_number)
     ).all()
     answer_map = {(a.visit_number, a.question_key): a for a in answers}
+
+    # v6.5.3: validate analysis_2 from freshly queried answers.
+    # Admin may explicitly force-complete an incomplete audit.
+    if not force:
+        for visit_number in range(1, 6):
+            analysis_answer = answer_map.get((visit_number, "analysis_2"))
+            if analysis_answer is None or analysis_answer.answer_value not in ("0", "1"):
+                raise HTTPException(
+                    422,
+                    f"Точка {visit_number}: заполните вопрос «Определяет, что помогло и что помешало достижению целей — навыки»",
+                )
+            if not (analysis_answer.comment or "").strip():
+                raise HTTPException(
+                    422,
+                    f"Точка {visit_number}: обязательный комментарий к вопросу «Определяет, что помогло и что помешало достижению целей — навыки»",
+                )
     question_by_key = {q["key"]: q for q in questions}
 
     missing = []
@@ -1109,7 +1117,7 @@ def submit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(cu
             missing.append(f"visit:{visit_number}:gps")
             missing_labels.append(f"Визит {visit_number}: GPS")
 
-    if missing:
+    if missing and not force:
         # Убираем повторы, сохраняя порядок, чтобы сообщение было читаемым.
         labels = list(dict.fromkeys(missing_labels))
         raise HTTPException(
@@ -1138,7 +1146,7 @@ def submit(audit_id: str, db: Session = Depends(get_db), user: User = Depends(cu
         action="Завершил аудит",
         entity_type="audit",
         entity_id=audit.id,
-        details=f"{percent}% {level}",
+        details=(f"{percent}% {level} · принудительно Admin" if force else f"{percent}% {level}"),
     ))
     db.commit()
     return {"total_score": total, "total_percent": percent, "level": level, "sections": sections}
