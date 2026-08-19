@@ -516,8 +516,9 @@ def dashboard(
 
 
 
-@router.get("/dashboard/level-audits")
-def dashboard_level_audits(
+
+@router.get("/dashboard/level-visits")
+def dashboard_level_visits(
     level: str | None = None,
     region_id: str | None = None,
     auditor_id: str | None = None,
@@ -526,16 +527,23 @@ def dashboard_level_audits(
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
+    """One row per completed visit for dashboard drill-down."""
     allowed_levels = {"Мастер", "Уверенный", "Базовый"}
     if level is not None and level not in allowed_levels:
         raise HTTPException(422, "Неизвестный уровень оценки")
 
     stmt = (
-        select(Audit)
-        .options(joinedload(Audit.employee), joinedload(Audit.region), joinedload(Audit.auditor))
+        select(Audit, Visit)
+        .join(Visit, Visit.audit_id == Audit.id)
+        .options(
+            joinedload(Audit.employee),
+            joinedload(Audit.region),
+            joinedload(Audit.auditor),
+        )
         .where(Audit.status == AuditStatus.completed)
-        .order_by(Audit.submitted_at.desc(), Audit.audit_date.desc())
+        .order_by(Audit.audit_date.desc(), Audit.submitted_at.desc(), Visit.visit_number.asc())
     )
+
     if level:
         stmt = stmt.where(Audit.level == level)
     if user.role == Role.leader:
@@ -550,28 +558,71 @@ def dashboard_level_audits(
     if month:
         try:
             year, month_num = map(int, month.split("-"))
-            start = date(year, month_num, 1)
-            end = date(year + (month_num == 12), 1 if month_num == 12 else month_num + 1, 1)
-            stmt = stmt.where(Audit.audit_date >= start, Audit.audit_date < end)
+            start_date = date(year, month_num, 1)
+            end_date = date(year + (month_num == 12), 1 if month_num == 12 else month_num + 1, 1)
+            stmt = stmt.where(Audit.audit_date >= start_date, Audit.audit_date < end_date)
         except Exception as error:
             raise HTTPException(422, "Месяц должен быть в формате ГГГГ-ММ") from error
 
-    rows = db.scalars(stmt.limit(500)).unique().all()
+    pairs = db.execute(stmt.limit(1000)).all()
+    if not pairs:
+        return []
+
+    audit_ids = list({audit.id for audit, _ in pairs})
+
+    # Visit result calculated from actual answers, excluding N/A.
+    question_rows = db.scalars(
+        select(QuestionSetting)
+        .where(QuestionSetting.is_active == True, QuestionSetting.step.notin_([0, 8]))
+    ).all()
+    weights = {q.key: float(q.weight or 0) for q in question_rows}
+
+    answer_rows = db.scalars(
+        select(Answer).where(Answer.audit_id.in_(audit_ids))
+    ).all()
+    answer_map = {}
+    for answer in answer_rows:
+        key = (answer.audit_id, answer.visit_number)
+        bucket = answer_map.setdefault(key, [0.0, 0.0])
+        value = str(answer.answer_value or "").upper()
+        if value in ("NA", "N/A"):
+            continue
+        weight = weights.get(answer.question_key, 0.0)
+        if value in ("0", "1"):
+            bucket[1] += weight
+            if value == "1":
+                bucket[0] += weight
+
+    timing_rows = db.scalars(
+        select(VisitTiming).where(VisitTiming.audit_id.in_(audit_ids))
+    ).all()
+    timing_map = {(t.audit_id, t.visit_number): t for t in timing_rows}
+
     from app.timezone_utils import to_tashkent_naive
-    return [{
-        "id": a.id,
-        "completed_at": (
-            to_tashkent_naive(a.submitted_at).strftime("%d.%m.%Y %H:%M")
-            if a.submitted_at else "—"
-        ),
-        "audit_date": a.audit_date.isoformat() if a.audit_date else None,
-        "employee_name": a.employee.full_name if a.employee else "—",
-        "region_name": a.region.name if a.region else "—",
-        "auditor_name": a.auditor.full_name if a.auditor else "—",
-        "status": a.status.value if hasattr(a.status, "value") else str(a.status),
-        "total_percent": a.total_percent,
-        "level": a.level,
-    } for a in rows]
+
+    result = []
+    for audit, visit in pairs:
+        earned, possible = answer_map.get((audit.id, visit.visit_number), [0.0, 0.0])
+        visit_percent = round(earned / possible * 100, 1) if possible else 0
+        timing = timing_map.get((audit.id, visit.visit_number))
+        ended_local = to_tashkent_naive(timing.ended_at) if timing and timing.ended_at else None
+
+        result.append({
+            "audit_id": audit.id,
+            "visit_number": visit.visit_number,
+            "audit_date": audit.audit_date.isoformat() if audit.audit_date else None,
+            "visit_end_time": ended_local.strftime("%H:%M") if ended_local else "—",
+            "employee_name": audit.employee.full_name if audit.employee else "—",
+            "region_name": audit.region.name if audit.region else "—",
+            "auditor_name": audit.auditor.full_name if audit.auditor else "—",
+            "status": "Завершён",
+            "result": visit_percent,
+            "audit_result": audit.total_percent,
+            "level": audit.level,
+            "shop_code": visit.shop_code or "—",
+        })
+
+    return result
 
 
 def _comparison_allowed(user: User):

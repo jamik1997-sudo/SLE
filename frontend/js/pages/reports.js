@@ -21,29 +21,43 @@ function filterDashboardEmployeesByEvaluator(allEmployees,evaluatorId){
 }
 
 
-function dashboardLevelRows(level){
-  const rows=asArray(state.dashboardData?.recent,'recent').filter(x=>String(x.level||'')===String(level||''));
-  return rows;
-}
 
-function renderDashboardLevelList(level){
-  const rows=dashboardLevelRows(level);
+
+async function renderDashboardLevelList(level){
+  const filters=currentDashboardFilters();
+  const qs=new URLSearchParams();
+  if(level)qs.set('level',level);
+  Object.entries(filters).forEach(([k,v])=>{if(v)qs.set(k,v)});
+
+  const title=level||'Завершённые визиты';
+  loadingPage('dashboard',title);
+
+  let rows;
+  try{
+    rows=asArray(await api('/audits/dashboard/level-visits?'+qs.toString(),{force:true}),'visits');
+  }catch(e){
+    toast(e.message||'Не удалось загрузить завершённые визиты');
+    return dashboard(filters);
+  }
+
   shell(`${mainNav('dashboard')}
-    <div class="card">
-      <div class="section-head">
-        <div>
-          <h1>${esc(level)}</h1>
-          <p class="muted">Завершённые аудиты по выбранному уровню</p>
-        </div>
-        <button class="btn secondary" id="backToDashboard">Назад</button>
+    <div class="dashboard-head">
+      <div>
+        <h1>${esc(title)}</h1>
+        <p class="muted">${rows.length} завершённых визитов</p>
       </div>
+      <button class="btn secondary" id="backToDashboard">← Назад</button>
+    </div>
+    <div class="card">
       <div class="table-wrap">
-        <table class="table level-audits-table">
+        <table class="table level-visits-table">
           <thead>
             <tr>
-              <th>Завершён</th>
               <th>Дата</th>
+              <th>Время</th>
               <th>Сотрудник</th>
+              <th>Визит</th>
+              <th>Код ТТ</th>
               <th>Регион</th>
               <th>Оценивающий</th>
               <th>Статус</th>
@@ -52,20 +66,26 @@ function renderDashboardLevelList(level){
           </thead>
           <tbody>
             ${rows.length?rows.map(x=>`
-              <tr>
-                <td><span class="nowrap">${esc(x.completed_at||x.submitted_at||x.visit_start_time||'—')}</span></td>
+              <tr class="clickable" data-visit-view="${x.audit_id}" data-visit-number="${x.visit_number}">
                 <td><span class="nowrap">${esc(x.audit_date||'—')}</span></td>
+                <td><span class="nowrap">${esc(x.visit_end_time||'—')}</span></td>
                 <td><span class="employee-nowrap">${esc(x.employee_name||'—')}</span></td>
+                <td><span class="nowrap">Точка ${esc(x.visit_number||'—')}</span></td>
+                <td><span class="nowrap">${esc(x.shop_code||'—')}</span></td>
                 <td>${esc(x.region_name||'—')}</td>
-                <td>${esc(x.auditor_name||x.evaluator_name||'—')}</td>
-                <td>${esc(x.status||'completed')}</td>
-                <td><strong>${x.total_percent!=null?`${x.total_percent}%`:'—'}</strong></td>
-              </tr>`).join(''):`<tr><td colspan="6" class="muted">Нет завершённых аудитов</td></tr>`}
+                <td>${esc(x.auditor_name||'—')}</td>
+                <td><span class="badge ok">${esc(x.status||'Завершён')}</span></td>
+                <td><strong>${x.result!=null?`${x.result}%`:'—'}</strong></td>
+              </tr>`).join(''):
+              `<tr><td colspan="9" class="muted">Нет завершённых визитов</td></tr>`}
           </tbody>
         </table>
       </div>
     </div>`);
-  $('#backToDashboard').onclick=dashboard;
+
+  bindNav();
+  $('#backToDashboard').onclick=()=>dashboard(filters);
+  bindCompletedVisitRows();
 }
 
 
@@ -153,49 +173,47 @@ function dashboardFilterBox(f){
 }
 
 function filterDashboardDependentOptions(){
-  const region=$('#dashRegion'), employee=$('#dashEmployee'), auditor=$('#dashAuditor');
+  const region=$('#dashRegion'),employee=$('#dashEmployee'),auditor=$('#dashAuditor');
   if(!region||!employee||!auditor)return;
 
-  const rid=region.value;
+  const rid=region.value||'';
+  const employeeId=employee.value||'';
   const employeeOption=employee.selectedOptions?.[0];
-  const selectedEmployeeId=employee.value||'';
-  const employeeLeaderId=selectedEmployeeId?(employeeOption?.dataset.leader||''):'';
+  const employeeLeaderId=employeeId?(employeeOption?.dataset.leader||''):'';
 
   // Оценивающие:
-  // - руководитель только выбранного сотрудника;
-  // - остальные руководители скрываются;
-  // - аудиторы и менеджеры остаются доступными;
-  // - при выбранном регионе руководитель должен относиться к этому региону.
+  // выбран сотрудник -> из руководителей только его руководитель.
+  // аудиторы и менеджеры остаются доступными.
   [...auditor.options].forEach((o,i)=>{
     if(i===0)return;
     const role=o.dataset.role||'';
     const regions=(o.dataset.regions||'').split(',').filter(Boolean);
+    let visible=true;
 
-    const regionOk=!rid || role!=='leader' || regions.includes(rid);
-    const employeeOk=
-      !selectedEmployeeId ||
-      role!=='leader' ||
-      (!!employeeLeaderId && String(o.value)===String(employeeLeaderId));
-
-    o.hidden=!(regionOk&&employeeOk);
+    if(role==='leader'){
+      if(employeeId){
+        visible=!!employeeLeaderId && String(o.value)===String(employeeLeaderId);
+      }else if(rid){
+        visible=regions.includes(rid);
+      }
+    }
+    o.hidden=!visible;
   });
-  if(auditor.value && auditor.selectedOptions[0]?.hidden)auditor.value='';
+
+  if(auditor.value&&auditor.selectedOptions[0]?.hidden)auditor.value='';
 
   // Сотрудники:
-  // если в Оценивающих выбран руководитель — показываем только его сотрудников.
   const selectedAuditor=auditor.selectedOptions?.[0];
   const leaderId=(selectedAuditor?.dataset.role==='leader')?auditor.value:'';
 
   [...employee.options].forEach((o,i)=>{
     if(i===0)return;
-    const regionOk=!rid||o.dataset.region===rid;
-    const leaderOk=!leaderId||o.dataset.leader===leaderId;
+    const regionOk=!rid||String(o.dataset.region||'')===String(rid);
+    const leaderOk=!leaderId||String(o.dataset.leader||'')===String(leaderId);
     o.hidden=!(regionOk&&leaderOk);
   });
 
-  // Не сбрасываем выбранного сотрудника только потому, что изменился список
-  // оценивающих. Сбрасываем его лишь при реальной несовместимости региона/руководителя.
-  if(employee.value && employee.selectedOptions[0]?.hidden)employee.value='';
+  if(employee.value&&employee.selectedOptions[0]?.hidden)employee.value='';
 }
 
 function currentDashboardFilters(){
@@ -556,16 +574,18 @@ function comparisonQuestionRows(rows,onlyChanges){
 
 
 
+
+
 if(!window.__sleDashboardLevelClickBound){
   window.__sleDashboardLevelClickBound=true;
-  const openLevel=e=>{
-    const completed=e.target.closest?.('[data-dashboard-completed]');
-    const card=e.target.closest?.('[data-dashboard-level]');
-    if(!completed&&!card)return;
+  const openDashboardDrilldown=e=>{
+    const levelCard=e.target.closest?.('[data-dashboard-level]');
+    const completedCard=e.target.closest?.('[data-dashboard-completed]');
+    if(!levelCard&&!completedCard)return;
     if(e.type==='keydown'&&!['Enter',' '].includes(e.key))return;
     e.preventDefault();
-    renderDashboardLevelList(card?card.dataset.dashboardLevel:null);
+    renderDashboardLevelList(levelCard?levelCard.dataset.dashboardLevel:null);
   };
-  document.addEventListener('click',openLevel);
-  document.addEventListener('keydown',openLevel);
+  document.addEventListener('click',openDashboardDrilldown);
+  document.addEventListener('keydown',openDashboardDrilldown);
 }
