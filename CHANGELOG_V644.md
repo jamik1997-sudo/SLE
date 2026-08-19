@@ -1,4 +1,4 @@
-# SLE v6.5.3 — Offline stability hotfix
+# SLE v6.5.5 — Offline stability hotfix
 
 - Fixed `restoreLocalAudit is not defined`.
 - Normal online audit creation no longer depends on offline restore code.

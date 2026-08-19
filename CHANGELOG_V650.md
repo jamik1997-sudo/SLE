@@ -1,4 +1,4 @@
-# SLE v6.5.3 — Concurrent user performance
+# SLE v6.5.5 — Concurrent user performance
 
 Target: stable simultaneous questionnaire work for a small team on the current Oracle VM.
 
