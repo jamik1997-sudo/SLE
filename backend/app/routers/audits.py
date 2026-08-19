@@ -517,8 +517,9 @@ def dashboard(
 
 
 
-@router.get("/dashboard/level-visits")
-def dashboard_level_visits(
+
+@router.get("/dashboard/completed-audits")
+def dashboard_completed_audits(
     level: str | None = None,
     region_id: str | None = None,
     auditor_id: str | None = None,
@@ -527,21 +528,20 @@ def dashboard_level_visits(
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    """One row per completed visit for dashboard drill-down."""
+    """One row per completed audit for dashboard drill-down."""
     allowed_levels = {"Мастер", "Уверенный", "Базовый"}
     if level is not None and level not in allowed_levels:
         raise HTTPException(422, "Неизвестный уровень оценки")
 
     stmt = (
-        select(Audit, Visit)
-        .join(Visit, Visit.audit_id == Audit.id)
+        select(Audit)
         .options(
             joinedload(Audit.employee),
             joinedload(Audit.region),
             joinedload(Audit.auditor),
         )
         .where(Audit.status == AuditStatus.completed)
-        .order_by(Audit.audit_date.desc(), Audit.submitted_at.desc(), Visit.visit_number.asc())
+        .order_by(Audit.audit_date.desc(), Audit.submitted_at.desc())
     )
 
     if level:
@@ -564,64 +564,23 @@ def dashboard_level_visits(
         except Exception as error:
             raise HTTPException(422, "Месяц должен быть в формате ГГГГ-ММ") from error
 
-    pairs = db.execute(stmt.limit(1000)).all()
-    if not pairs:
-        return []
-
-    audit_ids = list({audit.id for audit, _ in pairs})
-
-    # Visit result calculated from actual answers, excluding N/A.
-    question_rows = db.scalars(
-        select(QuestionSetting)
-        .where(QuestionSetting.is_active == True, QuestionSetting.step.notin_([0, 8]))
-    ).all()
-    weights = {q.key: float(q.weight or 0) for q in question_rows}
-
-    answer_rows = db.scalars(
-        select(Answer).where(Answer.audit_id.in_(audit_ids))
-    ).all()
-    answer_map = {}
-    for answer in answer_rows:
-        key = (answer.audit_id, answer.visit_number)
-        bucket = answer_map.setdefault(key, [0.0, 0.0])
-        value = str(answer.answer_value or "").upper()
-        if value in ("NA", "N/A"):
-            continue
-        weight = weights.get(answer.question_key, 0.0)
-        if value in ("0", "1"):
-            bucket[1] += weight
-            if value == "1":
-                bucket[0] += weight
-
-    timing_rows = db.scalars(
-        select(VisitTiming).where(VisitTiming.audit_id.in_(audit_ids))
-    ).all()
-    timing_map = {(t.audit_id, t.visit_number): t for t in timing_rows}
+    rows = db.scalars(stmt.limit(500)).unique().all()
 
     from app.timezone_utils import to_tashkent_naive
-
     result = []
-    for audit, visit in pairs:
-        earned, possible = answer_map.get((audit.id, visit.visit_number), [0.0, 0.0])
-        visit_percent = round(earned / possible * 100, 1) if possible else 0
-        timing = timing_map.get((audit.id, visit.visit_number))
-        ended_local = to_tashkent_naive(timing.ended_at) if timing and timing.ended_at else None
-
+    for audit in rows:
+        completed_local = to_tashkent_naive(audit.submitted_at) if audit.submitted_at else None
         result.append({
-            "audit_id": audit.id,
-            "visit_number": visit.visit_number,
+            "id": audit.id,
             "audit_date": audit.audit_date.isoformat() if audit.audit_date else None,
-            "visit_end_time": ended_local.strftime("%H:%M") if ended_local else "—",
+            "completed_at": completed_local.strftime("%d.%m.%Y %H:%M") if completed_local else "—",
             "employee_name": audit.employee.full_name if audit.employee else "—",
             "region_name": audit.region.name if audit.region else "—",
             "auditor_name": audit.auditor.full_name if audit.auditor else "—",
             "status": "Завершён",
-            "result": visit_percent,
-            "audit_result": audit.total_percent,
+            "result": audit.total_percent,
             "level": audit.level,
-            "shop_code": visit.shop_code or "—",
         })
-
     return result
 
 
