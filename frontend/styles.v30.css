@@ -80,7 +80,7 @@ input[readonly]{opacity:.9;cursor:not-allowed}
 .brand-home{appearance:none;border:0;background:transparent;color:inherit;padding:4px 2px;cursor:pointer;font:inherit}.brand-home:hover{opacity:.82}.brand-home:focus-visible{outline:3px solid rgba(255,212,0,.35);outline-offset:4px;border-radius:8px}
 
 
-/* v6.5.6 — compact recent audits table */
+/* v6.5.7 — compact recent audits table */
 .nowrap{white-space:nowrap}
 .recent-audits-wrap{overflow-x:auto}
 .recent-audits-table{min-width:980px;table-layout:auto}
@@ -102,7 +102,7 @@ input[readonly]{opacity:.9;cursor:not-allowed}
 .required-analysis-comment textarea:focus{min-height:86px}
 
 
-/* v6.5.6 dashboard width and one-line employee names */
+/* v6.5.7 dashboard width and one-line employee names */
 .shell .container{width:min(96vw,1600px);max-width:1600px}
 .recent-audits-table .employee-col{min-width:260px;max-width:none}
 .employee-nowrap{white-space:nowrap;display:inline-block}
@@ -111,7 +111,7 @@ input[readonly]{opacity:.9;cursor:not-allowed}
   .recent-audits-table .employee-col{min-width:250px}
 }
 
-/* v6.5.6 — admin site status */
+/* v6.5.7 — admin site status */
 .site-status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
 .site-status-item{border:1px solid var(--border);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:8px;min-height:110px}
 .site-status-item>span:first-child{font-weight:700}.site-status-item small{color:var(--muted)}
@@ -123,7 +123,7 @@ input[readonly]{opacity:.9;cursor:not-allowed}
 @media(max-width:1000px){.site-status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:600px){.site-status-grid{grid-template-columns:1fr}}
 
-/* v6.5.6 dashboard level list */
+/* v6.5.7 dashboard level list */
 .level-audits-table{min-width:1050px}
 .dashboard-level-clickable{cursor:pointer}
 

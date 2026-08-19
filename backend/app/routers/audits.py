@@ -199,8 +199,6 @@ def list_audits(limit: int = 100, db: Session = Depends(get_db), user: User = De
         joinedload(Audit.employee), joinedload(Audit.region),
         joinedload(Audit.auditor), joinedload(Audit.leader), selectinload(Audit.visits)
     ).where(Audit.status != AuditStatus.cancelled).order_by(Audit.last_saved_at.desc())
-    if level:
-        stmt = stmt.where(Audit.level == level)
     if user.role == Role.leader:
         stmt = stmt.where(Audit.region_id.in_(allowed_regions(user)))
     rows = db.scalars(stmt.limit(min(max(limit, 1), 500))).all()
@@ -208,10 +206,10 @@ def list_audits(limit: int = 100, db: Session = Depends(get_db), user: User = De
         "id": a.id, "audit_date": a.audit_date, "status": a.status.value,
         "current_visit": a.current_visit, "current_step": a.current_step,
         "total_percent": a.total_percent, "level": a.level,
-        "employee_name": a.employee.full_name, "region_name": a.region.name,
+        "employee_name": a.employee.full_name if a.employee else "—", "region_name": a.region.name if a.region else "—",
         "last_saved_at": a.last_saved_at, "auditor_id": a.auditor_id,
-        "auditor_name": a.auditor.full_name, "leader_id": a.leader_id,
-        "leader_name": a.leader.full_name if a.leader else a.auditor.full_name,
+        "auditor_name": a.auditor.full_name if a.auditor else "—", "leader_id": a.leader_id,
+        "leader_name": a.leader.full_name if a.leader else (a.auditor.full_name if a.auditor else "—"),
         "is_mine": a.auditor_id == user.id,
         "visit_goals": "; ".join(
             f"{v.visit_number}. {v.goal.strip()}" for v in sorted(a.visits, key=lambda x: x.visit_number)
@@ -538,6 +536,8 @@ def dashboard_level_audits(
         .where(Audit.status == AuditStatus.completed)
         .order_by(Audit.submitted_at.desc(), Audit.audit_date.desc())
     )
+    if level:
+        stmt = stmt.where(Audit.level == level)
     if user.role == Role.leader:
         stmt = stmt.where(Audit.region_id.in_(allowed_regions(user)))
     if region_id:

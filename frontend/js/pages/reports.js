@@ -155,18 +155,36 @@ function dashboardFilterBox(f){
 function filterDashboardDependentOptions(){
   const region=$('#dashRegion'), employee=$('#dashEmployee'), auditor=$('#dashAuditor');
   if(!region||!employee||!auditor)return;
-  const rid=region.value;
 
+  const rid=region.value;
+  const employeeOption=employee.selectedOptions?.[0];
+  const selectedEmployeeId=employee.value||'';
+  const employeeLeaderId=selectedEmployeeId?(employeeOption?.dataset.leader||''):'';
+
+  // Оценивающие:
+  // - руководитель только выбранного сотрудника;
+  // - остальные руководители скрываются;
+  // - аудиторы и менеджеры остаются доступными;
+  // - при выбранном регионе руководитель должен относиться к этому региону.
   [...auditor.options].forEach((o,i)=>{
     if(i===0)return;
-    const role=o.dataset.role;
+    const role=o.dataset.role||'';
     const regions=(o.dataset.regions||'').split(',').filter(Boolean);
-    o.hidden=!!rid&&role==='leader'&&!regions.includes(rid);
-  });
-  if(auditor.selectedOptions[0]?.hidden)auditor.value='';
 
-  const selected=auditor.selectedOptions[0];
-  const leaderId=(selected?.dataset.role==='leader')?auditor.value:'';
+    const regionOk=!rid || role!=='leader' || regions.includes(rid);
+    const employeeOk=
+      !selectedEmployeeId ||
+      role!=='leader' ||
+      (!!employeeLeaderId && String(o.value)===String(employeeLeaderId));
+
+    o.hidden=!(regionOk&&employeeOk);
+  });
+  if(auditor.value && auditor.selectedOptions[0]?.hidden)auditor.value='';
+
+  // Сотрудники:
+  // если в Оценивающих выбран руководитель — показываем только его сотрудников.
+  const selectedAuditor=auditor.selectedOptions?.[0];
+  const leaderId=(selectedAuditor?.dataset.role==='leader')?auditor.value:'';
 
   [...employee.options].forEach((o,i)=>{
     if(i===0)return;
@@ -174,7 +192,10 @@ function filterDashboardDependentOptions(){
     const leaderOk=!leaderId||o.dataset.leader===leaderId;
     o.hidden=!(regionOk&&leaderOk);
   });
-  if(employee.selectedOptions[0]?.hidden)employee.value='';
+
+  // Не сбрасываем выбранного сотрудника только потому, что изменился список
+  // оценивающих. Сбрасываем его лишь при реальной несовместимости региона/руководителя.
+  if(employee.value && employee.selectedOptions[0]?.hidden)employee.value='';
 }
 
 function currentDashboardFilters(){
@@ -270,13 +291,13 @@ function bindDashboardFilters(){
   if(!region||!auditor||!employee||!month)return;
   filterDashboardDependentOptions();
   bindCompletedVisitRows();
-  region.onchange=()=>{filterDashboardDependentOptions();scheduleDashboardApply()};
-  auditor.onchange=()=>{filterDashboardDependentOptions();scheduleDashboardApply()};
+  region.onchange=()=>{filterDashboardDependentOptions();scheduleDashboardApply(250)};
+  auditor.onchange=()=>{filterDashboardDependentOptions();scheduleDashboardApply(250)};
   employee.onchange=()=>{
-      clearTimeout(dashboardFilterTimer);
-      if(typeof filterDashboardDependentOptions==='function')filterDashboardDependentOptions();
-      dashboard(currentDashboardFilters(),{partial:true,force:true});
-    };
+    clearTimeout(dashboardFilterTimer);
+    filterDashboardDependentOptions();
+    dashboard(currentDashboardFilters(),{partial:true,force:true});
+  };
   month.onchange=()=>scheduleDashboardApply();
   $('#applyDashFilters').onclick=()=>{
     clearTimeout(dashboardFilterTimer);
