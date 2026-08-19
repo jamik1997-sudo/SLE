@@ -459,6 +459,44 @@ function bindWizard(){
 }
 function saveVisitFields(extra={}){if(!state.visit||!state.audit)return;const visits=Array.isArray(state.audit.visits)?state.audit.visits:(state.audit.visits=[]);let visit=visits.find(v=>v&&v.visit_number===state.visit);if(!visit){visit={visit_number:state.visit,shop_code:'',goal:'',comment:'',latitude:null,longitude:null,gps_accuracy:null};visits.push(visit)}const payload={};if($('#shopCode'))payload.shop_code=normalizeShopCode($('#shopCode').value);if($('#visitGoal'))payload.goal=$('#visitGoal').value.trim();if($('#visitComment'))payload.comment=$('#visitComment').value;if(extra&&extra.constructor===Object)Object.assign(payload,extra);if(!state.pendingVisit||typeof state.pendingVisit!=='object')state.pendingVisit={};Object.assign(visit,payload);Object.assign(state.pendingVisit,payload);persistDraft();scheduleSync(1200);updateNextState()}
 function captureGps(){if(!navigator.geolocation)return toast('Геолокация не поддерживается на этом устройстве');const btn=$('#gps');if(btn){btn.disabled=true;btn.textContent='Определение местоположения…'}navigator.geolocation.getCurrentPosition(async p=>{try{saveVisitFields({latitude:p.coords.latitude,longitude:p.coords.longitude,gps_accuracy:p.coords.accuracy});await flushSync();toast('GPS-координаты сохранены');renderWizard()}catch(e){toast(e.message)}},e=>{if(btn){btn.disabled=false;btn.textContent='Определить местоположение'};const messages={1:'Доступ к геолокации запрещён',2:'Местоположение недоступно',3:'Превышено время ожидания GPS'};toast(messages[e.code]||('Не удалось определить местоположение: '+e.message))},{enableHighAccuracy:true,timeout:25000,maximumAge:0})}
+
+function currentPageMissingField(){
+  const map=answersMap();
+  const visit=[0,8].includes(state.step)?0:state.visit;
+
+  if(state.step===1){
+    const v=asArray(state.audit?.visits,'visits').find(x=>x.visit_number===state.visit)||{};
+    if(!(v.shop_code||'').trim())return {message:'Введите код торговой точки',selector:'#shopCode'};
+    if(!(v.goal||'').trim())return {message:'Укажите цель визита',selector:'#visitGoal'};
+    if(v.latitude==null||v.longitude==null)return {message:'Определите GPS-координаты торговой точки',selector:'#gps'};
+  }
+
+  const qs=asArray(state.questions,'questions').filter(q=>Number(q.step)===Number(state.step));
+  for(const q of qs){
+    const a=map[`${visit}:${q.key}`];
+    if(!a||!['0','1','NA'].includes(String(a.answer_value||''))){
+      return {message:`Ответьте на вопрос: ${q.text||q.section||q.key}`,selector:`.question[data-key="${q.key}"]`};
+    }
+    if(q.key==='analysis_2'&&!String(a.comment||'').trim()){
+      return {message:'Заполните обязательный комментарий к вопросу «Определяет, что помогло и что помешало достижению целей — навыки»',selector:'[data-required-comment="analysis_2"] textarea'};
+    }
+  }
+  return null;
+}
+
+function showCurrentPageMissingField(){
+  const missing=currentPageMissingField();
+  if(!missing)return false;
+  toast(missing.message);
+  queueMicrotask(()=>{
+    const el=document.querySelector(missing.selector);
+    el?.scrollIntoView?.({behavior:'smooth',block:'center'});
+    if(el?.focus)el.focus();
+    else el?.querySelector?.('button,input,textarea,select')?.focus?.();
+  });
+  return true;
+}
+
 function currentComplete(){const map=answersMap(),qs=state.questions.filter(q=>q.step===state.step),visit=[0,8].includes(state.step)?0:state.visit;if(qs.some(q=>!map[`${visit}:${q.key}`]))return false;if(state.step===1){const v=state.audit.visits.find(x=>x.visit_number===state.visit);if(!v.shop_code||!v.goal||v.latitude==null||v.longitude==null)return false}return true}
 async function saveProgress(){await flushSync({current_visit:state.visit,current_step:state.step})}
 
@@ -534,8 +572,10 @@ async function nextStep(){
   if(button){button.disabled=true;button.setAttribute('aria-busy','true')}
   const fromVisit=state.visit,fromStep=state.step;
   try{
-    if(!currentComplete()&&!(fromStep===8&&state.me?.role==='admin'))
-      throw new Error('Заполните код ТТ, цель визита, определите GPS и ответьте на все вопросы');
+    if(!currentComplete()&&!(fromStep===8&&state.me?.role==='admin')){
+      showCurrentPageMissingField();
+      return;
+    }
     if(fromStep===8){
       persistDraft();
       if(!navigator.onLine){state.offlinePendingSubmit=true;persistDraft();setSaving('Офлайн — аудит ожидает отправки');return renderOfflinePendingResult()}
@@ -692,3 +732,16 @@ document.addEventListener('click',e=>{
   e.stopImmediatePropagation();
   requestVisitLocation(btn);
 },{capture:true});
+
+
+if(!window.__sleRequiredFieldHintBound){
+  window.__sleRequiredFieldHintBound=true;
+  document.addEventListener('pointerdown',e=>{
+    const btn=e.target.closest?.('#next');
+    if(!btn||!btn.disabled)return;
+    if(state.step===8&&state.me?.role==='admin')return;
+    e.preventDefault();
+    showCurrentPageMissingField();
+  },true);
+}
+

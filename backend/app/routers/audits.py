@@ -515,6 +515,63 @@ def dashboard(
 
 
 
+
+@router.get("/dashboard/level-audits")
+def dashboard_level_audits(
+    level: str,
+    region_id: str | None = None,
+    auditor_id: str | None = None,
+    employee_id: str | None = None,
+    month: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    allowed_levels = {"Мастер", "Уверенный", "Базовый"}
+    if level not in allowed_levels:
+        raise HTTPException(422, "Неизвестный уровень оценки")
+
+    stmt = (
+        select(Audit)
+        .options(joinedload(Audit.employee), joinedload(Audit.region), joinedload(Audit.auditor))
+        .where(Audit.status == AuditStatus.completed, Audit.level == level)
+        .order_by(Audit.submitted_at.desc(), Audit.audit_date.desc())
+    )
+    if user.role == Role.leader:
+        stmt = stmt.where(Audit.region_id.in_(allowed_regions(user)))
+    if region_id:
+        ensure_region_access(user, region_id)
+        stmt = stmt.where(Audit.region_id == region_id)
+    if auditor_id:
+        stmt = stmt.where(Audit.auditor_id == auditor_id)
+    if employee_id:
+        stmt = stmt.where(Audit.employee_id == employee_id)
+    if month:
+        try:
+            year, month_num = map(int, month.split("-"))
+            start = date(year, month_num, 1)
+            end = date(year + (month_num == 12), 1 if month_num == 12 else month_num + 1, 1)
+            stmt = stmt.where(Audit.audit_date >= start, Audit.audit_date < end)
+        except Exception as error:
+            raise HTTPException(422, "Месяц должен быть в формате ГГГГ-ММ") from error
+
+    rows = db.scalars(stmt.limit(500)).unique().all()
+    from app.timezone_utils import to_tashkent_naive
+    return [{
+        "id": a.id,
+        "completed_at": (
+            to_tashkent_naive(a.submitted_at).strftime("%d.%m.%Y %H:%M")
+            if a.submitted_at else "—"
+        ),
+        "audit_date": a.audit_date.isoformat() if a.audit_date else None,
+        "employee_name": a.employee.full_name if a.employee else "—",
+        "region_name": a.region.name if a.region else "—",
+        "auditor_name": a.auditor.full_name if a.auditor else "—",
+        "status": a.status.value if hasattr(a.status, "value") else str(a.status),
+        "total_percent": a.total_percent,
+        "level": a.level,
+    } for a in rows]
+
+
 def _comparison_allowed(user: User):
     if user.role != Role.admin:
         raise HTTPException(403, "Раздел сравнения доступен только администратору")
@@ -1069,7 +1126,7 @@ def submit(audit_id: str, force: bool = False, db: Session = Depends(get_db), us
     ).all()
     answer_map = {(a.visit_number, a.question_key): a for a in answers}
 
-    # v6.5.3: validate analysis_2 from freshly queried answers.
+    # v6.5.5: validate analysis_2 from freshly queried answers.
     # Admin may explicitly force-complete an incomplete audit.
     if not force:
         for visit_number in range(1, 6):
