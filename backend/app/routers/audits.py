@@ -199,6 +199,8 @@ def list_audits(limit: int = 100, db: Session = Depends(get_db), user: User = De
         joinedload(Audit.employee), joinedload(Audit.region),
         joinedload(Audit.auditor), joinedload(Audit.leader), selectinload(Audit.visits)
     ).where(Audit.status != AuditStatus.cancelled).order_by(Audit.last_saved_at.desc())
+    if level:
+        stmt = stmt.where(Audit.level == level)
     if user.role == Role.leader:
         stmt = stmt.where(Audit.region_id.in_(allowed_regions(user)))
     rows = db.scalars(stmt.limit(min(max(limit, 1), 500))).all()
@@ -518,7 +520,7 @@ def dashboard(
 
 @router.get("/dashboard/level-audits")
 def dashboard_level_audits(
-    level: str,
+    level: str | None = None,
     region_id: str | None = None,
     auditor_id: str | None = None,
     employee_id: str | None = None,
@@ -527,13 +529,13 @@ def dashboard_level_audits(
     user: User = Depends(current_user),
 ):
     allowed_levels = {"Мастер", "Уверенный", "Базовый"}
-    if level not in allowed_levels:
+    if level is not None and level not in allowed_levels:
         raise HTTPException(422, "Неизвестный уровень оценки")
 
     stmt = (
         select(Audit)
         .options(joinedload(Audit.employee), joinedload(Audit.region), joinedload(Audit.auditor))
-        .where(Audit.status == AuditStatus.completed, Audit.level == level)
+        .where(Audit.status == AuditStatus.completed)
         .order_by(Audit.submitted_at.desc(), Audit.audit_date.desc())
     )
     if user.role == Role.leader:

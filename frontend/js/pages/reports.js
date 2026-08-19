@@ -1,4 +1,15 @@
 
+function filterDashboardEvaluatorsByEmployee(allEvaluators,allEmployees,employeeId){
+  const evaluators=asArray(allEvaluators,'evaluators');
+  if(!employeeId)return evaluators;
+  const employee=asArray(allEmployees,'employees').find(x=>String(x.id)===String(employeeId));
+  if(!employee)return evaluators;
+  const ids=[employee.leader_id,employee.auditor_id,employee.evaluator_id].filter(Boolean).map(String);
+  if(!ids.length)return evaluators;
+  return evaluators.filter(x=>ids.includes(String(x.id)));
+}
+
+
 function filterDashboardEmployeesByEvaluator(allEmployees,evaluatorId){
   const list=asArray(allEmployees,'employees');
   if(!evaluatorId)return list;
@@ -49,12 +60,12 @@ function renderDashboardLevelList(level){
                 <td>${esc(x.auditor_name||x.evaluator_name||'—')}</td>
                 <td>${esc(x.status||'completed')}</td>
                 <td><strong>${x.total_percent!=null?`${x.total_percent}%`:'—'}</strong></td>
-              </tr>`).join(''):`<tr><td colspan="7" class="muted">Нет завершённых аудитов</td></tr>`}
+              </tr>`).join(''):`<tr><td colspan="6" class="muted">Нет завершённых аудитов</td></tr>`}
           </tbody>
         </table>
       </div>
     </div>`);
-  $('#backToDashboard').onclick=dashboardPage;
+  $('#backToDashboard').onclick=dashboard;
 }
 
 
@@ -133,7 +144,7 @@ function statBar(label,value,count){return`<div class="stat-row"><div class="sta
 
 function dashboardResults(d){
   const maxLevel=Math.max(1,...Object.values(d.levels));
-  return `<div class="kpi-grid"><div class="kpi kpi-audits"><div class="kpi-icon">▣</div><div><span>Завершено аудитов</span><strong>${d.total}</strong><small>в выбранном периоде</small></div></div><div class="kpi kpi-average"><div class="kpi-icon">★</div><div><span>Средний результат</span><strong>${d.average}%</strong><small>по завершённым аудитам</small></div></div><div class="kpi kpi-master dashboard-level-card" data-dashboard-level="Мастер" role="button" tabindex="0"><div class="kpi-icon">♛</div><div><span>Мастер</span><strong>${d.levels['Мастер']||0}</strong><small>${d.total?Math.round((d.levels['Мастер']||0)/d.total*100):0}% от общего числа</small></div></div><div class="kpi kpi-confident dashboard-level-card" data-dashboard-level="Уверенный" role="button" tabindex="0"><div class="kpi-icon">◆</div><div><span>Уверенный</span><strong>${d.levels['Уверенный']||0}</strong><small>${d.total?Math.round((d.levels['Уверенный']||0)/d.total*100):0}% от общего числа</small></div></div><div class="kpi kpi-basic dashboard-level-card" data-dashboard-level="Базовый" role="button" tabindex="0"><div class="kpi-icon">●</div><div><span>Базовый</span><strong>${d.levels['Базовый']||0}</strong><small>${d.total?Math.round((d.levels['Базовый']||0)/d.total*100):0}% от общего числа</small></div></div></div><div class="card"><h2>Результаты по каждому блоку</h2>${d.blocks?.length?`<div class="table-wrap"><table class="table block-results"><thead><tr><th>Блок</th><th>Кол-во оценок</th><th>Средний результат</th></tr></thead><tbody>${d.blocks.map(x=>`<tr><td>${esc(dashboardBlockName(x.name))}</td><td>${x.count}</td><td><div class="block-result-cell"><strong>${x.average}%</strong><div class="mini-bar"><i style="width:${Math.max(0,Math.min(100,x.average))}%"></i></div></div></td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Нет данных</p>'}</div><div class="grid two"><div class="card"><h2>Уровни оценки</h2>${Object.entries(d.levels).map(([name,count])=>`<div class="level-row"><span>${esc(name)}</span><div class="mini-bar"><i style="width:${count/maxLevel*100}%"></i></div><strong>${count}</strong></div>`).join('')}</div><div class="card"><h2>Динамика по месяцам</h2>${d.months.length?d.months.map(x=>statBar(x.month,x.average,x.count)).join(''):'<p class="muted">Нет данных</p>'}</div></div><div class="grid two"><div class="card"><h2>Результаты по регионам</h2>${d.regions.length?d.regions.map(x=>statBar(x.name,x.average,x.count)).join(''):'<p class="muted">Нет данных</p>'}</div><div class="card"><h2>Топ сотрудников</h2>${d.employees.length?`<div class="table-wrap"><table class="table"><tr><th>Сотрудник</th><th>Регион</th><th>Среднее</th><th>Аудиты</th></tr>${d.employees.map(x=>`<tr><td>${esc(x.name)}</td><td>${esc(x.region)}</td><td><strong>${x.average}%</strong></td><td>${x.count}</td></tr>`).join('')}</table></div>`:'<p class="muted">Нет данных</p>'}</div></div><div class="card"><h2>Последние завершённые аудиты</h2>${d.recent.length?`<div class="table-wrap recent-audits-wrap"><table class="table recent-audits-table"><tr><th>Дата</th><th>Время начала</th><th>Сотрудник</th><th>Визит</th><th>Код точки</th><th>Результат точки</th><th>Зона роста сотрудника</th><th>Локация точки</th></tr>${d.recent.map(x=>`<tr data-visit-view="${x.id}" data-visit-number="${x.visit_number}" class="clickable"><td class="date-col"><span class="nowrap">${esc(x.audit_date)}</span></td><td class="time-col"><span class="nowrap">${esc(x.visit_start_time||'—')}</span></td><td class="employee-col"><span class="employee-nowrap">${esc(x.employee_name||'—')}</span></td><td class="visit-col"><span class="nowrap">Точка ${x.visit_number}</span></td><td class="shop-col"><span class="nowrap">${esc(x.shop_code||'—')}</span></td><td class="result-col"><strong class="nowrap">${x.total_percent??'—'}%</strong></td><td>${esc(x.growth_zone||'—')}</td><td>${x.latitude!=null&&x.longitude!=null?`<a class="coords-link" href="${x.location_url}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${Number(x.latitude).toFixed(6)}, ${Number(x.longitude).toFixed(6)}</a>`:'—'}</td></tr>`).join('')}</table></div>`:'<p class="muted">Нет данных</p>'}</div>`;
+  return `<div class="kpi-grid"><div class="kpi kpi-audits"><div class="kpi-icon">▣</div><div><span>Завершённые визиты</span><strong>${d.total}</strong><small>в выбранном периоде</small></div></div><div class="kpi kpi-average"><div class="kpi-icon">★</div><div><span>Средний результат</span><strong>${d.average}%</strong><small>по завершённым аудитам</small></div></div><div class="kpi kpi-master dashboard-level-card" data-dashboard-level="Мастер" role="button" tabindex="0"><div class="kpi-icon">♛</div><div><span>Мастер</span><strong>${d.levels['Мастер']||0}</strong><small>${d.total?Math.round((d.levels['Мастер']||0)/d.total*100):0}% от общего числа</small></div></div><div class="kpi kpi-confident dashboard-level-card" data-dashboard-level="Уверенный" role="button" tabindex="0"><div class="kpi-icon">◆</div><div><span>Уверенный</span><strong>${d.levels['Уверенный']||0}</strong><small>${d.total?Math.round((d.levels['Уверенный']||0)/d.total*100):0}% от общего числа</small></div></div><div class="kpi kpi-basic dashboard-level-card" data-dashboard-level="Базовый" role="button" tabindex="0"><div class="kpi-icon">●</div><div><span>Базовый</span><strong>${d.levels['Базовый']||0}</strong><small>${d.total?Math.round((d.levels['Базовый']||0)/d.total*100):0}% от общего числа</small></div></div></div><div class="card"><h2>Результаты по каждому блоку</h2>${d.blocks?.length?`<div class="table-wrap"><table class="table block-results"><thead><tr><th>Блок</th><th>Кол-во оценок</th><th>Средний результат</th></tr></thead><tbody>${d.blocks.map(x=>`<tr><td>${esc(dashboardBlockName(x.name))}</td><td>${x.count}</td><td><div class="block-result-cell"><strong>${x.average}%</strong><div class="mini-bar"><i style="width:${Math.max(0,Math.min(100,x.average))}%"></i></div></div></td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Нет данных</p>'}</div><div class="grid two"><div class="card"><h2>Уровни оценки</h2>${Object.entries(d.levels).map(([name,count])=>`<div class="level-row"><span>${esc(name)}</span><div class="mini-bar"><i style="width:${count/maxLevel*100}%"></i></div><strong>${count}</strong></div>`).join('')}</div><div class="card"><h2>Динамика по месяцам</h2>${d.months.length?d.months.map(x=>statBar(x.month,x.average,x.count)).join(''):'<p class="muted">Нет данных</p>'}</div></div><div class="grid two"><div class="card"><h2>Результаты по регионам</h2>${d.regions.length?d.regions.map(x=>statBar(x.name,x.average,x.count)).join(''):'<p class="muted">Нет данных</p>'}</div><div class="card"><h2>Топ сотрудников</h2>${d.employees.length?`<div class="table-wrap"><table class="table"><tr><th>Сотрудник</th><th>Регион</th><th>Среднее</th><th>Аудиты</th></tr>${d.employees.map(x=>`<tr><td>${esc(x.name)}</td><td>${esc(x.region)}</td><td><strong>${x.average}%</strong></td><td>${x.count}</td></tr>`).join('')}</table></div>`:'<p class="muted">Нет данных</p>'}</div></div><div class="card"><h2>Последние завершённые аудиты</h2>${d.recent.length?`<div class="table-wrap recent-audits-wrap"><table class="table recent-audits-table"><tr><th>Дата</th><th>Время начала</th><th>Сотрудник</th><th>Визит</th><th>Код точки</th><th>Результат точки</th><th>Зона роста сотрудника</th><th>Локация точки</th></tr>${d.recent.map(x=>`<tr data-visit-view="${x.id}" data-visit-number="${x.visit_number}" class="clickable"><td class="date-col"><span class="nowrap">${esc(x.audit_date)}</span></td><td class="time-col"><span class="nowrap">${esc(x.visit_start_time||'—')}</span></td><td class="employee-col"><span class="employee-nowrap">${esc(x.employee_name||'—')}</span></td><td class="visit-col"><span class="nowrap">Точка ${x.visit_number}</span></td><td class="shop-col"><span class="nowrap">${esc(x.shop_code||'—')}</span></td><td class="result-col"><strong class="nowrap">${x.total_percent??'—'}%</strong></td><td>${esc(x.growth_zone||'—')}</td><td>${x.latitude!=null&&x.longitude!=null?`<a class="coords-link" href="${x.location_url}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${Number(x.latitude).toFixed(6)}, ${Number(x.longitude).toFixed(6)}</a>`:'—'}</td></tr>`).join('')}</table></div>`:'<p class="muted">Нет данных</p>'}</div>`;
 }
 
 function dashboardFilterBox(f){
@@ -261,7 +272,11 @@ function bindDashboardFilters(){
   bindCompletedVisitRows();
   region.onchange=()=>{filterDashboardDependentOptions();scheduleDashboardApply()};
   auditor.onchange=()=>{filterDashboardDependentOptions();scheduleDashboardApply()};
-  employee.onchange=()=>{clearTimeout(dashboardFilterTimer);dashboard(currentDashboardFilters(),{partial:true,force:true})};
+  employee.onchange=()=>{
+      clearTimeout(dashboardFilterTimer);
+      if(typeof filterDashboardDependentOptions==='function')filterDashboardDependentOptions();
+      dashboard(currentDashboardFilters(),{partial:true,force:true});
+    };
   month.onchange=()=>scheduleDashboardApply();
   $('#applyDashFilters').onclick=()=>{
     clearTimeout(dashboardFilterTimer);
@@ -472,7 +487,7 @@ async function loadComparisonDetail(left,right){
     <div class="section-head"><div><h2>Детальное сравнение · ${esc(d.shop_code)}</h2>
     <p class="muted">${esc(d.left.audit_date)} ↔ ${esc(d.right.audit_date)}</p></div></div>
     <div class="kpi-grid">
-      <div class="kpi"><div><span>Было</span><strong>${d.left.point_percent}%</strong><small>${esc(d.left.audit_date)}</small></div></div>
+      <div class="kpi" data-dashboard-completed="1" role="button" tabindex="0"><div><span>Было</span><strong>${d.left.point_percent}%</strong><small>${esc(d.left.audit_date)}</small></div></div>
       <div class="kpi"><div><span>Стало</span><strong>${d.right.point_percent}%</strong><small>${esc(d.right.audit_date)}</small></div></div>
       <div class="kpi"><div><span>Изменение</span><strong>${s.delta>0?'+':''}${s.delta}%</strong><small>по результату ТТ</small></div></div>
       <div class="kpi"><div><span>Улучшено</span><strong>${s.improved||0}</strong><small>вопросов</small></div></div>
@@ -523,11 +538,12 @@ function comparisonQuestionRows(rows,onlyChanges){
 if(!window.__sleDashboardLevelClickBound){
   window.__sleDashboardLevelClickBound=true;
   const openLevel=e=>{
+    const completed=e.target.closest?.('[data-dashboard-completed]');
     const card=e.target.closest?.('[data-dashboard-level]');
-    if(!card)return;
+    if(!completed&&!card)return;
     if(e.type==='keydown'&&!['Enter',' '].includes(e.key))return;
     e.preventDefault();
-    renderDashboardLevelList(card.dataset.dashboardLevel);
+    renderDashboardLevelList(card?card.dataset.dashboardLevel:null);
   };
   document.addEventListener('click',openLevel);
   document.addEventListener('keydown',openLevel);
