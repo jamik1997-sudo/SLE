@@ -270,7 +270,7 @@ def dashboard(
     user: User = Depends(current_user),
 ):
     """Low-load dashboard: aggregates stay in PostgreSQL; only recent 30 visits are materialized."""
-    cache_key = f"dashboard:v660:{user.id}:{region_id or ''}:{auditor_id or ''}:{employee_id or ''}:{month or ''}:{int(include_options)}"
+    cache_key = f"dashboard:v662:{user.id}:{region_id or ''}:{auditor_id or ''}:{employee_id or ''}:{month or ''}:{int(include_options)}"
     cached = get_cache(cache_key)
     if cached is not None:
         return cached
@@ -315,43 +315,55 @@ def dashboard(
     levels = {"Базовый": int(kpi.basic or 0), "Уверенный": int(kpi.confident or 0), "Мастер": int(kpi.master or 0)}
 
     # 2) Region / employee / month charts are grouped by PostgreSQL.
-    region_stmt = (
-        select(Region.name.label("name"), func.avg(Audit.total_percent).label("average"), func.count(Audit.id).label("count"))
-        .join(Region, Region.id == Audit.region_id)
-        .where(completed).group_by(Region.id, Region.name)
-    )
+    region_stmt = select(
+        Region.name.label("name"),
+        func.avg(Audit.total_percent).label("average"),
+        func.count(Audit.id).label("count"),
+    ).join(Region, Region.id == Audit.region_id).where(completed)
+    region_stmt = apply_filters(region_stmt).group_by(Region.id, Region.name)
     regions = [
         {"name": r.name, "average": round(float(r.average or 0), 1), "count": int(r.count or 0)}
-        for r in db.execute(apply_filters(region_stmt)).all()
+        for r in db.execute(region_stmt).all()
     ]
     regions.sort(key=lambda x: (-x["average"], x["name"]))
 
     employee_stmt = (
-        select(Employee.full_name.label("name"), Region.name.label("region"),
-               func.avg(Audit.total_percent).label("average"), func.count(Audit.id).label("count"))
+        select(
+            Employee.full_name.label("name"),
+            Region.name.label("region"),
+            func.avg(Audit.total_percent).label("average"),
+            func.count(Audit.id).label("count"),
+        )
         .join(Employee, Employee.id == Audit.employee_id)
         .join(Region, Region.id == Audit.region_id)
         .where(completed)
+    )
+    employee_stmt = (
+        apply_filters(employee_stmt)
         .group_by(Employee.id, Employee.full_name, Region.name)
         .order_by(func.avg(Audit.total_percent).desc(), func.count(Audit.id).desc())
         .limit(10)
     )
     employees = [
         {"name": r.name, "region": r.region, "average": round(float(r.average or 0), 1), "count": int(r.count or 0)}
-        for r in db.execute(apply_filters(employee_stmt)).all()
+        for r in db.execute(employee_stmt).all()
     ]
 
+    month_expr = func.to_char(Audit.audit_date, 'YYYY-MM')
+    month_stmt = select(
+        month_expr.label("month"),
+        func.avg(Audit.total_percent).label("average"),
+        func.count(Audit.id).label("count"),
+    ).where(completed)
     month_stmt = (
-        select(func.to_char(Audit.audit_date, 'YYYY-MM').label("month"),
-               func.avg(Audit.total_percent).label("average"), func.count(Audit.id).label("count"))
-        .where(completed)
-        .group_by(func.to_char(Audit.audit_date, 'YYYY-MM'))
-        .order_by(func.to_char(Audit.audit_date, 'YYYY-MM').desc())
+        apply_filters(month_stmt)
+        .group_by(month_expr)
+        .order_by(month_expr.desc())
         .limit(12)
     )
     months = [
         {"month": r.month, "average": round(float(r.average or 0), 1), "count": int(r.count or 0)}
-        for r in db.execute(apply_filters(month_stmt)).all()
+        for r in db.execute(month_stmt).all()
     ][::-1]
 
     # 3) Block chart stays aggregate-only; no Answer ORM objects are loaded.
@@ -374,10 +386,10 @@ def dashboard(
         .join(Audit, Audit.id == Answer.audit_id)
         .join(QuestionSetting, QuestionSetting.key == Answer.question_key)
         .where(completed, QuestionSetting.is_active == True, QuestionSetting.step.notin_([0, 8]))
-        .group_by(QuestionSetting.section)
     )
+    answer_stmt = apply_filters(answer_stmt).group_by(QuestionSetting.section)
     merged = {}
-    for row in db.execute(apply_filters(answer_stmt)).all():
+    for row in db.execute(answer_stmt).all():
         name = aliases.get(row.section, row.section)
         b = merged.setdefault(name, {"earned": 0.0, "possible": 0.0, "count": 0, "order": row.sort_order})
         b["earned"] += float(row.earned or 0)
@@ -453,7 +465,7 @@ def dashboard(
 
     options = None
     if include_options:
-        options_key = f"dashboard-options:v660:{user.id}:{region_id or ''}"
+        options_key = f"dashboard-options:v662:{user.id}:{region_id or ''}"
         options = get_cache(options_key)
         if options is None:
             region_q = select(Region).where(Region.is_active == True).order_by(Region.name)
@@ -484,7 +496,13 @@ def dashboard(
                 employee_q = employee_q.where(Employee.region_id == region_id)
             option_employees = db.scalars(employee_q).all()
 
-            month_options_stmt = select(distinct(func.to_char(Audit.audit_date, 'YYYY-MM'))).where(completed).order_by(distinct(func.to_char(Audit.audit_date, 'YYYY-MM')).desc())
+            month_option_expr = func.to_char(Audit.audit_date, 'YYYY-MM')
+            month_options_stmt = (
+                select(month_option_expr.label("month"))
+                .where(completed)
+                .group_by(month_option_expr)
+                .order_by(month_option_expr.desc())
+            )
             month_options = [x for x in db.scalars(month_options_stmt).all() if x]
 
             options = set_cache(options_key, {
