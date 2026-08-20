@@ -501,6 +501,20 @@ function currentComplete(){const map=answersMap(),qs=state.questions.filter(q=>q
 async function saveProgress(){await flushSync({current_visit:state.visit,current_step:state.step})}
 
 
+function firstMissingAuditField(){
+ const map=answersMap(),qs=asArray(state.questions,'questions'),screens=[{visit:0,step:0}];
+ for(let v=1;v<=5;v++)for(let st=1;st<=7;st++)screens.push({visit:v,step:st});screens.push({visit:0,step:8});
+ for(const x of screens){const vk=[0,8].includes(x.step)?0:x.visit;
+  if(x.step===1){const v=asArray(state.audit?.visits,'visits').find(y=>Number(y.visit_number)===x.visit)||{};
+   if(!String(v.shop_code||'').trim())return {...x,message:`Визит ${x.visit}: введите код торговой точки`,selector:'#shopCode'};
+   if(!String(v.goal||'').trim())return {...x,message:`Визит ${x.visit}: укажите цель визита`,selector:'#visitGoal'};
+   if(v.latitude==null||v.longitude==null)return {...x,message:`Визит ${x.visit}: определите GPS-координаты`,selector:'#gps'};}
+  for(const q of qs.filter(y=>Number(y.step)===x.step)){const a=map[`${vk}:${q.key}`],val=String(a?.answer_value||'').toUpperCase(),allowed=['Работа с возражениями','Обучение персонала'].includes(q.section)?['0','1','NA']:['0','1'];
+   if(!a||!allowed.includes(val))return {...x,message:`Заполните вопрос: ${q.text||q.section||q.key}`,selector:`.question[data-key="${q.key}"]`};
+   if(q.key==='analysis_2'&&!String(a.comment||'').trim())return {...x,message:'Заполните обязательный комментарий к вопросу «Определяет, что помогло и что помешало достижению целей — навыки»',selector:'[data-required-comment="analysis_2"] textarea'};}}
+ return null;}
+function openMissingAuditField(m){if(!m)return false;state.visit=Number(m.visit)||0;state.step=Number(m.step)||0;persistDraft();renderWizard();toast(m.message||'Заполните обязательное поле');setTimeout(()=>{const e=document.querySelector(m.selector||'')||document.querySelector('.question .answer');if(!e)return;e.scrollIntoView?.({behavior:'smooth',block:'center'});(e.matches?.('input,textarea,select,button')?e:e.querySelector?.('input,textarea,select,button'))?.focus?.();e.classList?.add('required-missing-highlight');setTimeout(()=>e.classList?.remove('required-missing-highlight'),2500)},80);return true;}
+
 function goToFirstMissingAuditField(err){
   const detail=err?.data?.detail||err?.detail||null;
   const missing=(detail&&typeof detail==='object'&&Array.isArray(detail.missing))?detail.missing:[];
@@ -523,15 +537,9 @@ function goToFirstMissingAuditField(err){
     if(m&&/комментарий|Определяет, что помогло|заполните вопрос/i.test(msg))
       target={visit:Number(m[1]),step:7};
   }
-  if(!target)return false;
-  state.visit=target.visit; state.step=target.step; persistDraft(); renderWizard();
-  queueMicrotask(()=>{
-    const el=document.querySelector('[data-required-comment="analysis_2"] textarea')||
-      document.querySelector('#shopCode')||document.querySelector('#visitGoal')||
-      document.querySelector('.question .answer');
-    el?.scrollIntoView?.({behavior:'smooth',block:'center'}); el?.focus?.();
-  });
-  return true;
+  if(!target){const m=firstMissingAuditField();return m?openMissingAuditField(m):false;}
+  const local=firstMissingAuditField();if(local&&Number(local.visit)===Number(target.visit)&&Number(local.step)===Number(target.step))return openMissingAuditField(local);
+  return openMissingAuditField({...target,message:'Заполните обязательное поле на этом шаге'});
 }
 
 async function submitAuditWithAdminOverride(){
@@ -578,6 +586,7 @@ async function nextStep(){
     }
     if(fromStep===8){
       persistDraft();
+      if(state.me?.role!=='admin'){const missing=firstMissingAuditField();if(missing){openMissingAuditField(missing);return;}}
       if(!navigator.onLine){state.offlinePendingSubmit=true;persistDraft();setSaving('Офлайн — аудит ожидает отправки');return renderOfflinePendingResult()}
       await flushSync();
       try{
@@ -585,8 +594,8 @@ async function nextStep(){
         state.audit={...state.audit,...r,status:'completed'};
         return renderResult(state.audit);
       }catch(err){
-        try{state.audit=await api('/audits/'+state.audit.id)}catch{}
-        throw err;
+        const keepVisit=state.visit,keepStep=state.step;try{state.audit=await api('/audits/'+state.audit.id)}catch{}
+        state.visit=keepVisit;state.step=keepStep;persistDraft();throw err;
       }
     }
 

@@ -17,10 +17,10 @@ engine_kwargs = {
 }
 if not is_sqlite:
     engine_kwargs.update({
-        "pool_size": 4,
-        "max_overflow": 2,
+        "pool_size": 3,
+        "max_overflow": 1,
         "pool_recycle": 600,
-        "pool_timeout": 8,
+        "pool_timeout": 3,
         "pool_use_lifo": True,
     })
 engine = create_engine(settings.database_url, **engine_kwargs)

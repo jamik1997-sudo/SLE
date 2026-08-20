@@ -6,6 +6,7 @@ from sqlalchemy import select, delete, text, or_, func, case, distinct, and_
 from sqlalchemy.orm import Session, selectinload, joinedload
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from app.database import get_db
+from app.config import get_settings
 from app.models import Answer, Audit, AuditStatus, Employee, Region, Role, User, UserRegion, Visit, VisitTiming, QuestionSetting, ScoreSetting, ActivityLog
 from app.questionnaire import QUESTION_MAP, QUESTIONS
 from app.schemas import AnswerSave, AuditCreate, ProgressSave, VisitSave, BatchSyncIn
@@ -13,6 +14,8 @@ from app.security import current_user
 from app.services.scoring import calculate
 from app.cache import get_cache, set_cache, clear_cache
 
+
+settings = get_settings()
 
 
 def _legacy_visit_text(value):
@@ -266,16 +269,15 @@ def dashboard(
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    """Optimized dashboard.
-
-    The old implementation loaded every completed audit together with all answers
-    and visits, which became increasingly expensive. This version uses compact
-    aggregate queries and only loads full relationships for the ten recent audits.
-    """
-    cache_key = f"dashboard:v614:{user.id}:{region_id or ''}:{auditor_id or ''}:{employee_id or ''}:{month or ''}:{int(include_options)}"
+    """Low-load dashboard: aggregates stay in PostgreSQL; only recent 30 visits are materialized."""
+    cache_key = f"dashboard:v660:{user.id}:{region_id or ''}:{auditor_id or ''}:{employee_id or ''}:{month or ''}:{int(include_options)}"
     cached = get_cache(cache_key)
     if cached is not None:
         return cached
+
+    # Never allow a dashboard request to occupy a DB connection indefinitely.
+    if not settings.database_url.startswith("sqlite"):
+        db.execute(text("SET LOCAL statement_timeout = '7000ms'"))
 
     def apply_filters(stmt):
         if user.role == Role.leader:
@@ -290,58 +292,76 @@ def dashboard(
         if month:
             try:
                 year, month_num = map(int, month.split("-"))
-                start = date(year, month_num, 1)
-                end = date(year + (month_num == 12), 1 if month_num == 12 else month_num + 1, 1)
-                stmt = stmt.where(Audit.audit_date >= start, Audit.audit_date < end)
+                start_date = date(year, month_num, 1)
+                end_date = date(year + (month_num == 12), 1 if month_num == 12 else month_num + 1, 1)
+                stmt = stmt.where(Audit.audit_date >= start_date, Audit.audit_date < end_date)
             except Exception as error:
                 raise HTTPException(422, "Месяц должен быть в формате ГГГГ-ММ") from error
         return stmt
 
-    base_condition = Audit.status == AuditStatus.completed
+    completed = Audit.status == AuditStatus.completed
 
-    # One compact row per audit; no answers/visits are loaded here.
-    summary_stmt = (
-        select(
-            Audit.id, Audit.audit_date, Audit.total_percent, Audit.level,
-            Region.name.label("region_name"), Employee.full_name.label("employee_name"),
-        )
+    # 1) KPI: one aggregate row instead of loading every audit into Python.
+    kpi_stmt = select(
+        func.count(Audit.id).label("total"),
+        func.coalesce(func.avg(Audit.total_percent), 0).label("average"),
+        func.count(Audit.id).filter(Audit.level == "Базовый").label("basic"),
+        func.count(Audit.id).filter(Audit.level == "Уверенный").label("confident"),
+        func.count(Audit.id).filter(Audit.level == "Мастер").label("master"),
+    ).where(completed)
+    kpi = db.execute(apply_filters(kpi_stmt)).one()
+    total = int(kpi.total or 0)
+    average = round(float(kpi.average or 0), 1)
+    levels = {"Базовый": int(kpi.basic or 0), "Уверенный": int(kpi.confident or 0), "Мастер": int(kpi.master or 0)}
+
+    # 2) Region / employee / month charts are grouped by PostgreSQL.
+    region_stmt = (
+        select(Region.name.label("name"), func.avg(Audit.total_percent).label("average"), func.count(Audit.id).label("count"))
         .join(Region, Region.id == Audit.region_id)
-        .join(Employee, Employee.id == Audit.employee_id)
-        .where(base_condition)
+        .where(completed).group_by(Region.id, Region.name)
     )
-    summary_rows = db.execute(apply_filters(summary_stmt)).all()
+    regions = [
+        {"name": r.name, "average": round(float(r.average or 0), 1), "count": int(r.count or 0)}
+        for r in db.execute(apply_filters(region_stmt)).all()
+    ]
+    regions.sort(key=lambda x: (-x["average"], x["name"]))
 
-    total = len(summary_rows)
-    average = round(sum((row.total_percent or 0) for row in summary_rows) / total, 1) if total else 0
-    levels = {"Базовый": 0, "Уверенный": 0, "Мастер": 0}
-    region_map: dict[str, dict] = {}
-    employee_map: dict[str, dict] = {}
-    month_map: dict[str, dict] = {}
+    employee_stmt = (
+        select(Employee.full_name.label("name"), Region.name.label("region"),
+               func.avg(Audit.total_percent).label("average"), func.count(Audit.id).label("count"))
+        .join(Employee, Employee.id == Audit.employee_id)
+        .join(Region, Region.id == Audit.region_id)
+        .where(completed)
+        .group_by(Employee.id, Employee.full_name, Region.name)
+        .order_by(func.avg(Audit.total_percent).desc(), func.count(Audit.id).desc())
+        .limit(10)
+    )
+    employees = [
+        {"name": r.name, "region": r.region, "average": round(float(r.average or 0), 1), "count": int(r.count or 0)}
+        for r in db.execute(apply_filters(employee_stmt)).all()
+    ]
 
-    for row in summary_rows:
-        levels[row.level or "Базовый"] = levels.get(row.level or "Базовый", 0) + 1
-        bucket = region_map.setdefault(row.region_name, {"sum": 0.0, "count": 0})
-        bucket["sum"] += row.total_percent or 0
-        bucket["count"] += 1
-        employee = employee_map.setdefault(row.employee_name, {"sum": 0.0, "count": 0, "region": row.region_name})
-        employee["sum"] += row.total_percent or 0
-        employee["count"] += 1
-        month_key = row.audit_date.strftime("%Y-%m")
-        month_bucket = month_map.setdefault(month_key, {"sum": 0.0, "count": 0})
-        month_bucket["sum"] += row.total_percent or 0
-        month_bucket["count"] += 1
+    month_stmt = (
+        select(func.to_char(Audit.audit_date, 'YYYY-MM').label("month"),
+               func.avg(Audit.total_percent).label("average"), func.count(Audit.id).label("count"))
+        .where(completed)
+        .group_by(func.to_char(Audit.audit_date, 'YYYY-MM'))
+        .order_by(func.to_char(Audit.audit_date, 'YYYY-MM').desc())
+        .limit(12)
+    )
+    months = [
+        {"month": r.month, "average": round(float(r.average or 0), 1), "count": int(r.count or 0)}
+        for r in db.execute(apply_filters(month_stmt)).all()
+    ][::-1]
 
-    def merged_section(name: str) -> str:
-        aliases = {
-            "Подготовка к визиту": "Подготовка", "Вступление": "Представление",
-            "Осмотр": "Осмотр", "Презентация": "Предложение",
-            "Работа с возражениями": "Предложение", "Работа в точке": "Работа в точке",
-            "Обучение персонала": "Работа в точке", "Завершение визита": "Завершение визита",
-            "Анализ визита": "Анализ визита",
-        }
-        return aliases.get(name, name)
-
-    # Aggregate blocks in PostgreSQL instead of materializing every Answer object.
+    # 3) Block chart stays aggregate-only; no Answer ORM objects are loaded.
+    aliases = {
+        "Подготовка к визиту": "Подготовка", "Вступление": "Представление",
+        "Осмотр": "Осмотр", "Презентация": "Предложение",
+        "Работа с возражениями": "Предложение", "Работа в точке": "Работа в точке",
+        "Обучение персонала": "Работа в точке", "Завершение визита": "Завершение визита",
+        "Анализ визита": "Анализ визита",
+    }
     answer_stmt = (
         select(
             QuestionSetting.section,
@@ -353,165 +373,141 @@ def dashboard(
         .select_from(Answer)
         .join(Audit, Audit.id == Answer.audit_id)
         .join(QuestionSetting, QuestionSetting.key == Answer.question_key)
-        .where(base_condition, QuestionSetting.is_active == True, QuestionSetting.step.notin_([0, 8]))
+        .where(completed, QuestionSetting.is_active == True, QuestionSetting.step.notin_([0, 8]))
         .group_by(QuestionSetting.section)
     )
-    answer_rows = db.execute(apply_filters(answer_stmt)).all()
-    merged_blocks: dict[str, dict] = {}
-    for row in answer_rows:
-        name = merged_section(row.section)
-        bucket = merged_blocks.setdefault(name, {"earned": 0.0, "possible": 0.0, "count": 0, "order": row.sort_order})
-        bucket["earned"] += float(row.earned or 0)
-        bucket["possible"] += float(row.possible or 0)
-        bucket["count"] += int(row.instances or 0)
-        bucket["order"] = min(bucket["order"], row.sort_order)
+    merged = {}
+    for row in db.execute(apply_filters(answer_stmt)).all():
+        name = aliases.get(row.section, row.section)
+        b = merged.setdefault(name, {"earned": 0.0, "possible": 0.0, "count": 0, "order": row.sort_order})
+        b["earned"] += float(row.earned or 0)
+        b["possible"] += float(row.possible or 0)
+        b["count"] += int(row.instances or 0)
+        b["order"] = min(b["order"], row.sort_order)
     blocks = [
-        {"name": name, "count": item["count"], "average": round(item["earned"] / item["possible"] * 100, 1) if item["possible"] else 0}
-        for name, item in sorted(merged_blocks.items(), key=lambda pair: pair[1]["order"])
+        {"name": name, "count": b["count"], "average": round(b["earned"] / b["possible"] * 100, 1) if b["possible"] else 0}
+        for name, b in sorted(merged.items(), key=lambda x: x[1]["order"])
     ]
 
-    regions = sorted([
-        {"name": name, "average": round(v["sum"] / v["count"], 1), "count": v["count"]}
-        for name, v in region_map.items()
-    ], key=lambda x: (-x["average"], x["name"]))
-    employees = sorted([
-        {"name": name, "region": v["region"], "average": round(v["sum"] / v["count"], 1), "count": v["count"]}
-        for name, v in employee_map.items()
-    ], key=lambda x: (-x["average"], -x["count"], x["name"]))[:10]
-    months = sorted([
-        {"month": name, "average": round(v["sum"] / v["count"], 1), "count": v["count"]}
-        for name, v in month_map.items()
-    ], key=lambda x: x["month"])[-12:]
+    # 4) Recent table: fetch only the last 30 VISITS and only their answers.
+    recent_stmt = (
+        select(
+            Audit.id.label("audit_id"), Audit.audit_date, Audit.total_percent.label("audit_percent"),
+            Employee.full_name.label("employee_name"),
+            Visit.visit_number, Visit.shop_code, Visit.latitude, Visit.longitude,
+            VisitTiming.started_at,
+        )
+        .join(Employee, Employee.id == Audit.employee_id)
+        .join(Visit, Visit.audit_id == Audit.id)
+        .outerjoin(VisitTiming, and_(VisitTiming.audit_id == Audit.id, VisitTiming.visit_number == Visit.visit_number))
+        .where(completed)
+        .order_by(Audit.submitted_at.desc(), Visit.visit_number.asc())
+        .limit(30)
+    )
+    recent_rows = db.execute(apply_filters(recent_stmt)).all()
+    pairs = [(r.audit_id, r.visit_number) for r in recent_rows]
 
-    recent_id_stmt = select(Audit.id).where(base_condition).order_by(Audit.submitted_at.desc()).limit(10)
-    recent_ids = list(db.scalars(apply_filters(recent_id_stmt)).all())
-    recent_audits = []
-    if recent_ids:
-        recent_audits = db.scalars(
-            select(Audit)
-            .options(selectinload(Audit.answers), selectinload(Audit.visits))
-            .where(Audit.id.in_(recent_ids))
-            .order_by(Audit.submitted_at.desc())
-        ).all()
-
-    qrows = db.scalars(select(QuestionSetting).where(QuestionSetting.is_active == True).order_by(QuestionSetting.sort_order)).all()
-    qmap = {q.key: q for q in qrows}
-    timing_map = {}
-    if recent_ids:
-        for timing in db.scalars(select(VisitTiming).where(VisitTiming.audit_id.in_(recent_ids))).all():
-            timing_map[(timing.audit_id, timing.visit_number)] = timing
+    score_map = {}
+    growth_map = {}
+    if pairs:
+        audit_ids = list({a for a, _ in pairs})
+        score_stmt = (
+            select(
+                Answer.audit_id, Answer.visit_number, QuestionSetting.section,
+                func.sum(case((Answer.answer_value == "1", QuestionSetting.weight), else_=0.0)).label("earned"),
+                func.sum(case((Answer.answer_value.in_(["0", "1"]), QuestionSetting.weight), else_=0.0)).label("possible"),
+            )
+            .join(QuestionSetting, QuestionSetting.key == Answer.question_key)
+            .where(Answer.audit_id.in_(audit_ids), QuestionSetting.is_active == True, QuestionSetting.step.notin_([0, 8]))
+            .group_by(Answer.audit_id, Answer.visit_number, QuestionSetting.section)
+        )
+        sections = {}
+        for row in db.execute(score_stmt).all():
+            key = (row.audit_id, row.visit_number)
+            sec = aliases.get(row.section, row.section)
+            bucket = sections.setdefault(key, [])
+            bucket.append((sec, float(row.earned or 0), float(row.possible or 0)))
+        for key, vals in sections.items():
+            earned = sum(v[1] for v in vals); possible = sum(v[2] for v in vals)
+            score_map[key] = round(earned / possible * 100, 1) if possible else 0
+            valid = [v for v in vals if v[2] > 0]
+            growth_map[key] = min(valid, key=lambda v: v[1]/v[2])[0] if valid else "—"
 
     from app.timezone_utils import to_tashkent_naive
     recent = []
-    for audit in recent_audits:
-        answers_by_visit: dict[int, list] = {}
-        for answer in audit.answers:
-            answers_by_visit.setdefault(answer.visit_number, []).append(answer)
-        for visit in sorted(audit.visits, key=lambda item: item.visit_number):
-            section_scores: dict[str, dict] = {}
-            earned = possible = 0.0
-            for answer in answers_by_visit.get(visit.visit_number, []):
-                question = qmap.get(answer.question_key)
-                if not question or question.step in (0, 8):
-                    continue
-                weight = float(question.weight or 0)
-                section_name = merged_section(question.section)
-                section = section_scores.setdefault(section_name, {"earned": 0.0, "possible": 0.0})
-                if answer.answer_value == "NA":
-                    continue
-                section["possible"] += weight
-                possible += weight
-                if answer.answer_value == "1":
-                    section["earned"] += weight
-                    earned += weight
-            growth = "—"
-            if section_scores:
-                growth = min(section_scores.items(), key=lambda item: item[1]["earned"] / item[1]["possible"] if item[1]["possible"] else 1)[0]
-            timing = timing_map.get((audit.id, visit.visit_number))
-            started_local = to_tashkent_naive(timing.started_at) if timing and timing.started_at else None
-            recent.append({
-                "id": audit.id, "visit_number": visit.visit_number, "audit_date": audit.audit_date,
-                "employee_name": audit.employee.full_name,
-                "visit_started_at": started_local.isoformat() if started_local else None,
-                "visit_start_time": started_local.strftime("%H:%M") if started_local else "—",
-                "shop_code": visit.shop_code or "—",
-                "total_percent": round(earned / possible * 100, 1) if possible else 0,
-                "audit_percent": audit.total_percent, "growth_zone": growth,
-                "latitude": visit.latitude, "longitude": visit.longitude,
-                "location_url": f"https://maps.google.com/?q={visit.latitude},{visit.longitude}" if visit.latitude is not None and visit.longitude is not None else None,
-            })
+    for row in recent_rows:
+        key=(row.audit_id,row.visit_number)
+        started_local=to_tashkent_naive(row.started_at) if row.started_at else None
+        recent.append({
+            "id": row.audit_id, "visit_number": row.visit_number, "audit_date": row.audit_date,
+            "employee_name": row.employee_name or "—",
+            "visit_started_at": started_local.isoformat() if started_local else None,
+            "visit_start_time": started_local.strftime("%H:%M") if started_local else "—",
+            "shop_code": row.shop_code or "—",
+            "total_percent": score_map.get(key, 0),
+            "audit_percent": row.audit_percent,
+            "growth_zone": growth_map.get(key, "—"),
+            "latitude": row.latitude, "longitude": row.longitude,
+            "location_url": f"https://maps.google.com/?q={row.latitude},{row.longitude}" if row.latitude is not None and row.longitude is not None else None,
+        })
 
     options = None
     if include_options:
-        # Filter options change infrequently, so cache them longer than dashboard metrics.
-        options_key = f"dashboard-options:v614:{user.id}:{region_id or ''}"
+        options_key = f"dashboard-options:v660:{user.id}:{region_id or ''}"
         options = get_cache(options_key)
         if options is None:
-            region_stmt = select(Region).where(Region.is_active == True).order_by(Region.name)
+            region_q = select(Region).where(Region.is_active == True).order_by(Region.name)
             if user.role == Role.leader:
-                region_stmt = region_stmt.where(Region.id.in_(allowed_regions(user)))
-            option_regions = db.scalars(region_stmt).all()
+                region_q = region_q.where(Region.id.in_(allowed_regions(user)))
+            option_regions = db.scalars(region_q).all()
 
-            # Оценивающие: аудиторы и менеджеры доступны во всех регионах,
-            # руководители — только в закреплённом регионе. Для руководителя
-            # список также показывает аудиторов и менеджеров, работавших в его регионе.
             evaluator_roles = (Role.leader, Role.auditor, Role.manager)
-            auditor_stmt = (
-                select(User)
-                .options(selectinload(User.regions))
-                .where(User.is_active == True, User.role.in_(evaluator_roles))
-                .order_by(User.full_name)
-            )
+            auditor_q = select(User).options(selectinload(User.regions)).where(
+                User.is_active == True, User.role.in_(evaluator_roles)
+            ).order_by(User.full_name)
             effective_region_id = region_id
             if user.role == Role.leader and not effective_region_id:
-                own_regions = sorted(allowed_regions(user))
-                effective_region_id = own_regions[0] if len(own_regions) == 1 else None
+                own = sorted(allowed_regions(user))
+                effective_region_id = own[0] if len(own) == 1 else None
             if effective_region_id:
                 leader_ids = select(UserRegion.user_id).where(UserRegion.region_id == effective_region_id)
-                auditor_stmt = auditor_stmt.where(
-                    or_(
-                        User.role.in_((Role.auditor, Role.manager)),
-                        and_(User.role == Role.leader, User.id.in_(leader_ids)),
-                    )
-                )
-            option_auditors = db.scalars(auditor_stmt).unique().all()
+                auditor_q = auditor_q.where(or_(
+                    User.role.in_((Role.auditor, Role.manager)),
+                    and_(User.role == Role.leader, User.id.in_(leader_ids)),
+                ))
+            option_auditors = db.scalars(auditor_q).unique().all()
 
-            employee_stmt = select(Employee).where(Employee.is_active == True).order_by(Employee.full_name)
+            employee_q = select(Employee).where(Employee.is_active == True).order_by(Employee.full_name)
             if user.role == Role.leader:
-                employee_stmt = employee_stmt.where(Employee.region_id.in_(allowed_regions(user)))
+                employee_q = employee_q.where(Employee.region_id.in_(allowed_regions(user)))
             if region_id:
-                employee_stmt = employee_stmt.where(Employee.region_id == region_id)
-            option_employees = db.scalars(employee_stmt).all()
+                employee_q = employee_q.where(Employee.region_id == region_id)
+            option_employees = db.scalars(employee_q).all()
 
-            month_stmt = select(
-                func.extract('year', Audit.audit_date).label('year'),
-                func.extract('month', Audit.audit_date).label('month'),
-            ).where(base_condition).group_by('year', 'month').order_by(text('year DESC'), text('month DESC'))
-            if user.role == Role.leader:
-                month_stmt = month_stmt.where(Audit.region_id.in_(allowed_regions(user)))
-            month_options = [f"{int(row.year):04d}-{int(row.month):02d}" for row in db.execute(month_stmt).all()]
+            month_options_stmt = select(distinct(func.to_char(Audit.audit_date, 'YYYY-MM'))).where(completed).order_by(distinct(func.to_char(Audit.audit_date, 'YYYY-MM')).desc())
+            month_options = [x for x in db.scalars(month_options_stmt).all() if x]
+
             options = set_cache(options_key, {
                 "regions": [{"id": x.id, "name": x.name} for x in option_regions],
-                "auditors": [{
-                    "id": x.id,
-                    "name": x.full_name,
-                    "role": x.role.value,
-                    "region_ids": [link.region_id for link in x.regions] if x.role == Role.leader else [],
-                } for x in option_auditors],
-                "employees": [{"id": x.id, "name": x.full_name, "region_id": x.region_id, "leader_id": getattr(x, "leader_id", None)} for x in option_employees],
+                "auditors": [{"id": x.id, "name": x.full_name, "role": x.role.value,
+                              "region_ids": [link.region_id for link in x.regions] if x.role == Role.leader else []}
+                             for x in option_auditors],
+                "employees": [{"id": x.id, "name": x.full_name, "region_id": x.region_id,
+                               "leader_id": getattr(x, "leader_id", None)} for x in option_employees],
                 "months": month_options,
-            }, ttl=300)
+            }, ttl=600)
 
     result = {
         "total": total, "average": average, "levels": levels, "regions": regions,
         "employees": employees, "months": months, "recent": recent, "blocks": blocks,
     }
     if include_options and options is not None:
-        result["filters"] = {
-            **options,
-            "selected": {"region_id": region_id, "auditor_id": auditor_id, "employee_id": employee_id, "month": month},
-        }
-    return set_cache(cache_key, result, ttl=60)
+        result["filters"] = {**options, "selected": {
+            "region_id": region_id, "auditor_id": auditor_id,
+            "employee_id": employee_id, "month": month,
+        }}
+    return set_cache(cache_key, result, ttl=30)
+
 
 
 
