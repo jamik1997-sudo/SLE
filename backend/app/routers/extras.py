@@ -274,7 +274,7 @@ def system_update(user: User = Depends(require_roles(Role.admin))):
 
     try:
         started = subprocess.run(
-            ["sudo", "-n", "/usr/bin/systemctl", "start", "sle-update.service"],
+            ["sudo", "-n", "/usr/bin/systemctl", "--no-block", "start", "sle-update.service"],
             capture_output=True,
             text=True,
             timeout=10,
