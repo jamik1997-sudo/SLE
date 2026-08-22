@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
-from app.database import get_db
+from app.database import DB_MAX_OVERFLOW, DB_POOL_SIZE, get_db
 from app.models import (ActivityLog, Answer, Audit, AuditStatus, Employee, QuestionSetting, Region, Role, ScoreSetting, User, Visit, VisitTiming)
 from app.security import current_user, require_roles
 from app.timezone_utils import to_tashkent_naive
@@ -233,11 +233,19 @@ def system_status(db: Session = Depends(get_db), user: User = Depends(require_ro
         eng = db.get_bind()
         p = getattr(eng, "pool", None)
         if p is not None:
+            size = p.size() if hasattr(p, "size") else DB_POOL_SIZE
+            checked_out = p.checkedout() if hasattr(p, "checkedout") else 0
+            max_overflow = DB_MAX_OVERFLOW
+            capacity = max(1, size + max_overflow)
             pool = {
-                "size": p.size() if hasattr(p,"size") else None,
-                "checked_out": p.checkedout() if hasattr(p,"checkedout") else None,
+                "size": size,
+                "max_overflow": max_overflow,
+                "capacity": capacity,
+                "checked_out": checked_out,
                 "overflow": p.overflow() if hasattr(p,"overflow") else None,
                 "checked_in": p.checkedin() if hasattr(p,"checkedin") else None,
+                "utilization_percent": round(checked_out / capacity * 100, 1),
+                "high_load": checked_out >= capacity,
             }
     except Exception:
         pass

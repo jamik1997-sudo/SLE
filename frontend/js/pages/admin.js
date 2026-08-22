@@ -72,11 +72,15 @@ async function loadSystemStatus(){
   try{
     const d=await api('/extras/system-status',{force:true,timeout:8000});
     const browserMs=Math.round(performance.now()-t), pool=d.pool||{};
+    const poolCapacity=Math.max(1,pool.capacity??pool.size??4);
+    const poolHighLoad=typeof pool.high_load==='boolean'
+      ?pool.high_load
+      :(pool.checked_out??0)>=poolCapacity;
     root.innerHTML=`<div class="site-status-grid">
       <div class="site-status-item"><span>Сайт / API</span>${statusBadge(d.api?.ok===true)}<small>Ответ из браузера: ${browserMs} мс</small></div>
       <div class="site-status-item"><span>База данных</span>${statusBadge(d.database?.ok===true)}<small>${d.database?.response_ms!=null?`Ответ БД: ${d.database.response_ms} мс`:'Нет данных'}</small></div>
       <div class="site-status-item"><span>Backend</span>${statusBadge(true,'Запущен','Остановлен')}<small>PID ${esc(d.api?.pid??'—')} · ${statusDuration(d.api?.uptime_seconds)}</small></div>
-      <div class="site-status-item"><span>Пул БД</span>${statusBadge((pool.checked_out??0)<(pool.size??4),'Норма','Высокая нагрузка')}<small>Активно: ${pool.checked_out??'—'} · пул: ${pool.size??'—'} · overflow: ${pool.overflow??'—'}</small></div>
+      <div class="site-status-item"><span>Пул БД</span>${statusBadge(!poolHighLoad,'Норма','Высокая нагрузка')}<small>Активно: ${pool.checked_out??'—'} из ${poolCapacity} · базовый пул: ${pool.size??'—'} · резерв: ${pool.max_overflow??'—'}</small></div>
     </div>${d.load?`<div class="site-status-foot">Нагрузка сервера: 1 мин — <b>${d.load['1m']}</b>, 5 мин — <b>${d.load['5m']}</b>, 15 мин — <b>${d.load['15m']}</b></div>`:''}${d.database?.error?`<div class="site-status-error">${esc(d.database.error)}</div>`:''}`;
   }catch(e){root.innerHTML=`<div class="site-status-error"><b>Не удалось проверить сайт</b><br>${esc(e.message)}</div>`}
 }
