@@ -1,0 +1,4 @@
+ubuntu ALL=(root) NOPASSWD: /usr/bin/systemctl start sle-update.service
+ubuntu ALL=(root) NOPASSWD: /usr/bin/systemctl restart sle
+ubuntu ALL=(root) NOPASSWD: /usr/bin/systemctl restart sle.service
+

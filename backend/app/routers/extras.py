@@ -1,6 +1,7 @@
 import time
 import os
 import json
+import subprocess
 from datetime import datetime
 from io import BytesIO
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -257,6 +258,36 @@ def system_status(db: Session = Depends(get_db), user: User = Depends(require_ro
         "load": load,
         "pool": pool,
     }
+
+@router.post("/system-update", status_code=202)
+def system_update(user: User = Depends(require_roles(Role.admin))):
+    """Start the fixed, root-managed updater; no user command is accepted."""
+    check = subprocess.run(
+        ["/usr/bin/systemctl", "is-active", "sle-update.service"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    if check.stdout.strip() in {"active", "activating"}:
+        return {"status": "already_running", "message": "Обновление уже выполняется"}
+
+    try:
+        started = subprocess.run(
+            ["sudo", "-n", "/usr/bin/systemctl", "start", "sle-update.service"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise HTTPException(status_code=503, detail=f"Не удалось запустить обновление: {exc}") from exc
+
+    if started.returncode != 0:
+        error = (started.stderr or started.stdout or "systemctl error").strip()[:300]
+        raise HTTPException(status_code=503, detail=f"Не удалось запустить обновление: {error}")
+
+    return {"status": "started", "message": "Обновление backend запущено"}
 
 @router.get("/questionnaire-report")
 def questionnaire_report(

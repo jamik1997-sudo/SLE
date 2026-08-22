@@ -1,0 +1,15 @@
+[Unit]
+Description=SLE controlled application update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/SLE
+ExecStart=/usr/local/bin/sle-update
+TimeoutStartSec=300
+StandardOutput=append:/home/ubuntu/SLE/backups/sle-update.log
+StandardError=append:/home/ubuntu/SLE/backups/sle-update.log
+

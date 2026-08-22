@@ -22,7 +22,7 @@ async function adminPage(){
   }catch(e){if(!regions.length)return toast(e.message)}
   const leaders=users.filter(x=>x.role==='leader');
   const leaderOptions=(selected='')=>leaders.map(x=>`<option value="${x.id}" ${selected===x.id?'selected':''}>${esc(x.full_name)} (${esc(x.regions?.[0]?.name||'без региона')})</option>`).join('');
-  shell(`${mainNav('admin')}${state.me?.role==='admin'?`<div class="card site-status-card"><div class="section-head"><div><h2>Статус сайта</h2><p class="muted">API, база данных и нагрузка сервера</p></div><button class="btn" id="refreshSystemStatus">Обновить</button></div><div id="systemStatusBody"><div class="muted">Проверка состояния…</div></div></div>`:' '}<div class="grid two"><div class="card"><h2>Добавить регион</h2><form id="addRegion"><div class="field"><label>Название</label><input name="name" required></div><button class="btn primary top-gap">Добавить</button></form></div><div class="card"><h2>Добавить сотрудника</h2><form id="addEmployee"><div class="field"><label>ФИО</label><input name="full_name" required></div><div class="field"><label>Регион</label><select name="region_id" required>${regions.map(r=>`<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select></div><div class="field"><label>Руководитель</label><select name="leader_id" required><option value="">Выберите руководителя</option>${leaderOptions()}</select></div><div class="field"><label>Должность</label><input name="position"></div><button class="btn primary top-gap">Добавить</button></form></div></div>
+  shell(`${mainNav('admin')}${state.me?.role==='admin'?`<div class="card site-status-card"><div class="section-head"><div><h2>Статус сайта</h2><p class="muted">API, база данных и нагрузка сервера</p></div><div class="actions"><button class="btn secondary" id="refreshSystemStatus">Обновить статус</button><button class="btn primary" id="updateBackend">Обновить backend</button></div></div><div id="systemStatusBody"><div class="muted">Проверка состояния…</div></div></div>`:' '}<div class="grid two"><div class="card"><h2>Добавить регион</h2><form id="addRegion"><div class="field"><label>Название</label><input name="name" required></div><button class="btn primary top-gap">Добавить</button></form></div><div class="card"><h2>Добавить сотрудника</h2><form id="addEmployee"><div class="field"><label>ФИО</label><input name="full_name" required></div><div class="field"><label>Регион</label><select name="region_id" required>${regions.map(r=>`<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select></div><div class="field"><label>Руководитель</label><select name="leader_id" required><option value="">Выберите руководителя</option>${leaderOptions()}</select></div><div class="field"><label>Должность</label><input name="position"></div><button class="btn primary top-gap">Добавить</button></form></div></div>
   <div class="card"><div class="section-head"><div><h2>Сотрудники</h2><p class="muted">Дубликат ФИО в одном регионе создать нельзя. Каждый сотрудник закрепляется за руководителем.</p></div></div><div id="employeeTable">${employeeTable(employees)}</div></div>
   <div class="card"><h2>Создать пользователя</h2><form id="addUser"><div class="grid two"><div class="field"><label>ФИО</label><input name="full_name" required></div><div class="field"><label>Логин</label><input name="login" minlength="3" required></div><div class="field"><label>Пароль</label><input name="password" type="password" minlength="8" required></div><div class="field"><label>Роль</label><select name="role" id="userRole"><option value="leader">Руководитель</option><option value="auditor">Аудитор</option><option value="manager">Менеджер</option>${state.me.role==='admin'?'<option value="admin">Администратор</option>':''}</select></div><div class="field span-2" id="regionField"><label>Регион руководителя</label><select name="region_id" required>${regions.map(r=>`<option value="${r.id}">${esc(r.name)}</option>`).join('')}</select></div></div><button class="btn primary top-gap">Создать</button></form></div>
   <div class="card"><h2>Пользователи</h2><div class="table-wrap"><table class="table"><tr><th>ФИО</th><th>Логин</th><th>Пароль</th><th>Роль</th><th>Доступ</th><th>Устройство</th><th></th></tr>${users.map(u=>`<tr><td>${esc(u.full_name)}</td><td>${esc(u.login)}</td><td>${u.can_view_password?(u.password_visible?`<span class="password-view"><code data-password-value="${esc(u.password_visible)}">••••••••</code><button type="button" class="btn secondary small" data-toggle-password="${u.id}">Показать</button></span>`:'<span class="muted">Недоступен до смены</span>'):'<span class="muted">Недоступен</span>'}</td><td>${roleName(u.role)}</td><td>${u.role==='leader'?(u.regions.map(r=>esc(r.name)).join(', ')||'—'):'Вся республика'}</td><td>${['leader','auditor'].includes(u.role)?(u.device_bound?`<span class="status ok">Привязано</span><small class="muted block">${esc(u.device_name||'Устройство')}</small>`:'<span class="status">Не привязано</span>'):'—'}</td><td><span class="actions"><button class="btn secondary small" data-edit-user="${u.id}">Изменить</button>${['leader','auditor'].includes(u.role)&&u.device_bound?`<button class="btn secondary small" data-reset-device="${u.id}" data-name="${esc(u.full_name)}">Сбросить устройство</button>`:''}${u.id!==state.me.id?`<button class="btn danger small" data-delete-user="${u.id}" data-name="${esc(u.full_name)}">Удалить</button>`:''}</span></td></tr>`).join('')}</table></div></div>`);
@@ -85,3 +85,41 @@ async function loadSystemStatus(){
   }catch(e){root.innerHTML=`<div class="site-status-error"><b>Не удалось проверить сайт</b><br>${esc(e.message)}</div>`}
 }
 document.addEventListener('click',e=>{if(e.target?.id==='refreshSystemStatus'){e.preventDefault();loadSystemStatus();}});
+
+async function updateBackendFromAdmin(button){
+  if(!confirm('Запустить обновление backend с GitHub? Сайт может быть недоступен около 15 секунд.'))return;
+  button.disabled=true;
+  button.textContent='Запуск обновления…';
+  try{
+    const result=await api('/extras/system-update',{method:'POST',timeout:15000});
+    toast(result.message||'Обновление backend запущено');
+    button.textContent='Backend обновляется…';
+
+    // The old workers can answer briefly after the request, so wait before polling.
+    await new Promise(resolve=>setTimeout(resolve,12000));
+    for(let attempt=1;attempt<=30;attempt++){
+      try{
+        const response=await fetch(API+'/health',{cache:'no-store'});
+        if(response.ok){
+          toast('Backend успешно обновлён');
+          button.textContent='Обновление завершено';
+          setTimeout(()=>location.reload(),1200);
+          return;
+        }
+      }catch{}
+      await new Promise(resolve=>setTimeout(resolve,2000));
+    }
+    throw new Error('Backend не ответил после обновления. Проверьте журнал sle-update.service');
+  }catch(error){
+    toast(error.message);
+    button.disabled=false;
+    button.textContent='Обновить backend';
+  }
+}
+
+document.addEventListener('click',e=>{
+  if(e.target?.id==='updateBackend'){
+    e.preventDefault();
+    updateBackendFromAdmin(e.target);
+  }
+});
